@@ -14,7 +14,7 @@ import '../../../core/theme/app_theme.dart';
 ///   - Scanning status banner.
 ///   - Deduplicated, signal-sorted list of discovered peers.
 ///   - Empty state when no peers are found.
-///   - Error state if discovery fails.
+///   - Error state if discovery fails, with a retry action.
 ///
 /// Navigates to [PairingScreen] when a peer is selected.
 class DiscoveryScreen extends ConsumerStatefulWidget {
@@ -24,25 +24,55 @@ class DiscoveryScreen extends ConsumerStatefulWidget {
   ConsumerState<DiscoveryScreen> createState() => _DiscoveryScreenState();
 }
 
-class _DiscoveryScreenState extends ConsumerState<DiscoveryScreen> {
+class _DiscoveryScreenState extends ConsumerState<DiscoveryScreen>
+    with WidgetsBindingObserver {
   @override
   void initState() {
     super.initState();
-    // Start discovery when the screen is first shown.
+    WidgetsBinding.instance.addObserver(this);
+    // Start discovery once the first frame has rendered so that the
+    // ProviderScope has fully initialised before we read providers.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       ref.read(discoveryProvider.notifier).startDiscovery();
     });
   }
 
   @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    switch (state) {
+      case AppLifecycleState.resumed:
+        // Re-start discovery when the app returns to the foreground.
+        ref.read(discoveryProvider.notifier).startDiscovery();
+      case AppLifecycleState.paused:
+      case AppLifecycleState.inactive:
+        // Stop scanning when the app moves to the background to save power.
+        ref.read(discoveryProvider.notifier).stopDiscovery();
+      default:
+        break;
+    }
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final state = ref.watch(discoveryProvider);
-    final cs = Theme.of(context).colorScheme;
-    final tt = Theme.of(context).textTheme;
 
     return AppScaffold(
       title: 'Nearby Devices',
       actions: [
+        // Manual refresh button — restarts scanning.
+        if (!state.isScanning)
+          IconButton(
+            icon: const Icon(Icons.refresh_rounded),
+            tooltip: 'Refresh',
+            onPressed: () =>
+                ref.read(discoveryProvider.notifier).startDiscovery(),
+          ),
         IconButton(
           icon: const Icon(Icons.settings_rounded),
           tooltip: 'Settings',
@@ -57,7 +87,11 @@ class _DiscoveryScreenState extends ConsumerState<DiscoveryScreen> {
 
           // ── Error state ──────────────────────────────────────────
           if (state.hasError)
-            _ErrorBanner(error: state.error!)
+            _ErrorBanner(
+              error: state.error!,
+              onRetry: () =>
+                  ref.read(discoveryProvider.notifier).startDiscovery(),
+            )
           // ── Peer list ────────────────────────────────────────────
           else if (state.hasPeers)
             Expanded(
@@ -131,29 +165,41 @@ class _ScanningBanner extends StatelessWidget {
 }
 
 class _ErrorBanner extends StatelessWidget {
-  const _ErrorBanner({required this.error});
+  const _ErrorBanner({required this.error, required this.onRetry});
   final String error;
+  final VoidCallback onRetry;
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
+    final tt = Theme.of(context).textTheme;
     return Padding(
       padding: AppTheme.pagePadding,
       child: Card(
         color: cs.errorContainer,
         child: Padding(
           padding: const EdgeInsets.all(AppTheme.spacingMd),
-          child: Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.warning_rounded, color: cs.onErrorContainer),
-              const SizedBox(width: AppTheme.spacingSm),
-              Expanded(
-                child: Text(
-                  error,
-                  style: Theme.of(context).textTheme.bodyMedium?.copyWith(
+              Row(
+                children: [
+                  Icon(Icons.warning_rounded, color: cs.onErrorContainer),
+                  const SizedBox(width: AppTheme.spacingSm),
+                  Expanded(
+                    child: Text(
+                      error,
+                      style: tt.bodyMedium?.copyWith(
                         color: cs.onErrorContainer,
                       ),
-                ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: AppTheme.spacingMd),
+              FilledButton.tonal(
+                onPressed: onRetry,
+                child: const Text('Open Settings / Retry'),
               ),
             ],
           ),

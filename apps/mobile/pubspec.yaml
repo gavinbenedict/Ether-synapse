@@ -25,6 +25,12 @@ dependencies:
   # Permissions
   permission_handler: ^11.3.1
 
+  # BLE scanning (central role)
+  flutter_reactive_ble: ^5.5.0
+
+  # BLE advertising (peripheral role)
+  flutter_ble_peripheral: ^2.1.1
+
   # Rust bridge (generated bindings will reference this)
   flutter_rust_bridge: ^2.3.0
 
@@ -44,13 +50,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  # assets:
-  #   - assets/images/
-  # fonts:
-  #   - family: Inter
-  #     fonts:
-  #       - asset: assets/fonts/Inter-Regular.ttf
-  #       - asset: assets/fonts/Inter-Medium.ttf
-  #         weight: 500
-  #       - asset: assets/fonts/Inter-SemiBold.ttf
-  #         weight: 600

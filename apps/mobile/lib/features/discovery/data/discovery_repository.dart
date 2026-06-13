@@ -1,28 +1,45 @@
+import 'dart:io';
+
 import '../../../shared/models/peer_device.dart';
 import '../../../services/discovery_service.dart';
+import 'ble_discovery_service.dart';
 
-/// Data layer for the discovery feature.
+/// Concrete implementation of [DiscoveryRepository].
 ///
-/// Owns the interface between the discovery Riverpod provider and the
-/// platform-specific [DiscoveryService] implementations (BLE platform channel
-/// and Rust mDNS bridge).
+/// Wraps [BleSynapseDiscoveryService] and exposes the merged, deduplicated
+/// [Stream<List<PeerDevice>>] that the provider listens to.
 ///
-/// DO NOT add BLE implementation here.
-/// DO NOT add mDNS implementation here.
-/// DO NOT add bridge calls here — those belong in the concrete [DiscoveryService].
-abstract interface class DiscoveryRepository {
-  /// Start discovery using all available backends.
-  Future<void> startDiscovery();
+/// On Android: uses BLE advertising + scanning via flutter_ble_peripheral
+/// and flutter_reactive_ble.
+///
+/// On other platforms: returns an error stream until platform-specific
+/// implementations are added in future milestones.
+class DiscoveryRepositoryImpl {
+  DiscoveryRepositoryImpl({
+    required String deviceName,
+  }) : _service = BleSynapseDiscoveryService(
+          deviceName: deviceName,
+          localPlatform: _detectLocalPlatform(),
+        );
 
-  /// Stop discovery and clear the peer list.
-  Future<void> stopDiscovery();
+  final BleSynapseDiscoveryService _service;
 
-  /// Merged, deduplicated stream of discovered peers from all backends.
-  ///
-  /// BLE peers and mDNS peers are merged by the repository using the
-  /// peer [PeerDevice.id] as the deduplication key.
-  Stream<List<PeerDevice>> get peersStream;
+  bool get isActive => _service.isActive;
 
-  /// Whether discovery is currently active.
-  bool get isActive;
+  Future<void> startDiscovery() => _service.startDiscovery();
+
+  Future<void> stopDiscovery() => _service.stopDiscovery();
+
+  Stream<List<PeerDevice>> get peersStream => _service.peersStream;
+
+  void dispose() => _service.dispose();
+
+  static PeerPlatform _detectLocalPlatform() {
+    if (Platform.isAndroid) return PeerPlatform.android;
+    if (Platform.isIOS) return PeerPlatform.ios;
+    if (Platform.isMacOS) return PeerPlatform.macos;
+    if (Platform.isWindows) return PeerPlatform.windows;
+    if (Platform.isLinux) return PeerPlatform.linux;
+    return PeerPlatform.unknown;
+  }
 }

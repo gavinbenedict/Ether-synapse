@@ -1,0 +1,73 @@
+/// Domain model for app settings.
+///
+/// Persisted to local device storage only — never transmitted.
+/// No account IDs, no cloud sync, no telemetry.
+final class AppSettings {
+  const AppSettings({
+    this.deviceName = 'My Device',
+    this.themePreference = ThemePreference.system,
+    this.defaultSaveDirectory,
+    this.showTransferHistory = true,
+  });
+
+  /// The display name broadcast during discovery.
+  ///
+  /// Max 24 characters (see AppConstants.maxDeviceNameLength).
+  final String deviceName;
+
+  /// User's preferred theme mode.
+  final ThemePreference themePreference;
+
+  /// Directory to save received files, or `null` to use platform default.
+  final String? defaultSaveDirectory;
+
+  /// Whether to show a history of completed transfers on the transfer screen.
+  final bool showTransferHistory;
+
+  AppSettings copyWith({
+    String? deviceName,
+    ThemePreference? themePreference,
+    String? defaultSaveDirectory,
+    bool? showTransferHistory,
+    bool clearSaveDirectory = false,
+  }) {
+    return AppSettings(
+      deviceName: deviceName ?? this.deviceName,
+      themePreference: themePreference ?? this.themePreference,
+      defaultSaveDirectory: clearSaveDirectory
+          ? null
+          : (defaultSaveDirectory ?? this.defaultSaveDirectory),
+      showTransferHistory: showTransferHistory ?? this.showTransferHistory,
+    );
+  }
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is AppSettings &&
+          other.deviceName == deviceName &&
+          other.themePreference == themePreference &&
+          other.defaultSaveDirectory == defaultSaveDirectory &&
+          other.showTransferHistory == showTransferHistory;
+
+  @override
+  int get hashCode => Object.hash(
+        deviceName,
+        themePreference,
+        defaultSaveDirectory,
+        showTransferHistory,
+      );
+}
+
+/// User's theme preference stored in settings.
+enum ThemePreference {
+  system,
+  light,
+  dark;
+
+  String get label => switch (this) {
+        ThemePreference.system => 'Follow system',
+        ThemePreference.light => 'Light',
+        ThemePreference.dark => 'Dark',
+      };
+}

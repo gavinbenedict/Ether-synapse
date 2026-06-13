@@ -14,9 +14,30 @@ abstract final class AppConstants {
   /// Maximum display length for a device name in the peer list.
   static const int maxDeviceNameLength = 24;
 
-  /// Scan timeout in seconds. After this period, a passive scan
-  /// result is considered stale and removed from the peer list.
-  static const int bleDiscoveryScanTimeoutSeconds = 30;
+  /// How long (seconds) before a peer that stops advertising is
+  /// considered lost and removed from the visible list.
+  static const int bleDiscoveryScanTimeoutSeconds = 15;
+
+  /// Maximum number of bytes used to encode the device name in the
+  /// BLE manufacturer-specific data payload.
+  static const int bleDeviceNameMaxBytes = 16;
+
+  /// BLE company identifier used in manufacturer-specific data.
+  /// 0xFFFF is reserved for testing by the Bluetooth SIG.
+  /// Replace with a registered company ID before production.
+  static const int bleCompanyId = 0xFFFF;
+
+  /// Protocol version byte embedded in every advertisement.
+  /// Increment when the advertisement payload format changes.
+  static const int bleProtocolVersion = 0x01;
+
+  /// Manufacturer data total length in bytes:
+  ///   2 bytes company ID  (handled by flutter_ble_peripheral)
+  ///   1 byte  protocol version
+  ///   1 byte  platform
+  ///  16 bytes device name (UTF-8, zero-padded)
+  ///   4 bytes session ID
+  static const int bleManufacturerDataLength = 22;
 
   // ── Transfer ────────────────────────────────────────────────────
   /// Default chunk size in bytes (64 KiB — see transfer-protocol.md).
