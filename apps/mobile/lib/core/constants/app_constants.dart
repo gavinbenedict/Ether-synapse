@@ -19,8 +19,11 @@ abstract final class AppConstants {
   static const int bleDiscoveryScanTimeoutSeconds = 15;
 
   /// Maximum number of bytes used to encode the device name in the
-  /// BLE manufacturer-specific data payload.
-  static const int bleDeviceNameMaxBytes = 16;
+  /// BLE manufacturer-specific data payload (v2 layout: 14 bytes).
+  ///
+  /// Reduced from 16 to 14 in protocol v2 to accommodate the new
+  /// capability-flags byte (byte 2) and SDK-version byte (byte 3).
+  static const int bleDeviceNameMaxBytes = 14;
 
   /// BLE company identifier used in manufacturer-specific data.
   /// 0xFFFF is reserved for testing by the Bluetooth SIG.
@@ -28,19 +31,26 @@ abstract final class AppConstants {
   static const int bleCompanyId = 0xFFFF;
 
   /// Protocol version byte embedded in every advertisement.
-  /// Increment when the advertisement payload format changes.
-  static const int bleProtocolVersion = 0x01;
+  /// v2: adds capability-flags byte and Android SDK version byte.
+  static const int bleProtocolVersion = 0x02;
 
-  /// Manufacturer data total length in bytes:
-  ///   2 bytes company ID  (handled by flutter_ble_peripheral)
-  ///   1 byte  protocol version
-  ///   1 byte  platform
-  ///  16 bytes device name (UTF-8, zero-padded)
-  ///   4 bytes session ID
+  /// Manufacturer data total length in bytes (v2 layout):
+  ///   Byte 0   : protocol version (0x02)
+  ///   Byte 1   : platform byte
+  ///   Byte 2   : capability flags
+  ///                bit 0 = supportsHotspot
+  ///                bit 1 = supportsWifiDirect
+  ///                bit 2 = supportsLocalWifi (connected to WiFi)
+  ///                bits 3–5 = wifiScore (0–7)
+  ///                bits 6–7 = reserved
+  ///   Byte 3   : Android SDK version (0 = unknown / non-Android)
+  ///   Bytes 4–17 : device name (UTF-8, zero-padded, 14 bytes)
+  ///   Bytes 18–21: session ID (random uint32, big-endian)
+  /// Total: 22 bytes (unchanged from v1; 2 bytes repurposed).
   static const int bleManufacturerDataLength = 22;
 
   // ── Transfer ────────────────────────────────────────────────────
-  /// Default chunk size in bytes (64 KiB — see transfer-protocol.md).
+  /// Default chunk size in bytes (64 KiB).
   static const int defaultChunkSizeBytes = 65536;
 
   /// Maximum number of concurrent file transfers (v1 — single session).

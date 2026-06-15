@@ -8,20 +8,26 @@ import 'package:permission_handler/permission_handler.dart';
 
 import '../../../core/constants/app_constants.dart';
 import '../../../shared/models/peer_device.dart';
+import '../../../shared/models/device_capabilities.dart';
+import '../../../shared/models/device_role.dart';
 import '../../../services/discovery_service.dart';
+import '../../../services/capability_service.dart';
+import '../../../services/gatt_service.dart';
 import 'ble_advertisement_codec.dart';
 
-/// Concrete implementation of [DiscoveryService] and [DiscoveryRepository]
-/// for the Android BLE stack.
+/// Concrete implementation of [DiscoveryService] for the Android BLE stack.
 ///
 /// Responsibilities:
 ///   - Requests all necessary BLE permissions before starting.
-///   - Starts BLE advertising via [FlutterBlePeripheral] so that
-///     remote devices can discover this device.
+///   - For [DeviceRole.receiver]: detects local capabilities via
+///     [CapabilityService] and encodes them into the advertisement payload
+///     (protocol v2) so senders receive real capability data without GATT.
+///   - Starts BLE advertising via [FlutterBlePeripheral].
 ///   - Scans for peers via [FlutterReactiveBle].
 ///   - Decodes manufacturer-specific data using [BleAdvertisementCodec].
 ///   - Merges, deduplicates, and expires stale peers.
 ///   - Emits a [List<PeerDevice>] snapshot every time the peer set changes.
+///   - Emits advertising and scanning state changes for the UI.
 ///
 /// Thread safety: all mutable state is accessed only from async callbacks
 /// on the same event loop; no explicit locking is required.
@@ -29,66 +35,106 @@ class BleSynapseDiscoveryService implements DiscoveryService {
   BleSynapseDiscoveryService({
     required String deviceName,
     required PeerPlatform localPlatform,
+    required DeviceRole role,
   })  : _deviceName = deviceName,
         _localPlatform = localPlatform,
+        _role = role,
         _sessionId = BleAdvertisementCodec.generateSessionId();
 
   final String _deviceName;
   final PeerPlatform _localPlatform;
+  final DeviceRole _role;
   final int _sessionId;
 
-  final FlutterReactiveBle _ble = FlutterReactiveBle();
-  final FlutterBlePeripheral _peripheral = FlutterBlePeripheral();
+  static bool _isGlobalBleOperationPending = false;
+  static final _peripheral = FlutterBlePeripheral();
+  static final _ble = FlutterReactiveBle();
+  final CapabilityService _capabilityService = CapabilityService();
+  final GattService _gattService = GattService();
 
-  // Scan subscription from flutter_reactive_ble.
   StreamSubscription<DiscoveredDevice>? _scanSubscription;
 
-  // Advertising state.
   bool _isAdvertising = false;
+  bool _isScanning = false;
+  bool _bluetoothEnabled = true;
+  bool _active = false;
 
-  // Peer state: keyed by peer ID (session ID hex string).
+  /// Local capabilities detected before advertising starts.
+  /// Null until detection completes (or if role is sender).
+  DeviceCapabilities? _localCapabilities;
+
   final Map<String, _PeerEntry> _peers = {};
 
-  // Output stream controller — broadcast so multiple listeners can attach.
   final StreamController<List<PeerDevice>> _peersController =
       StreamController<List<PeerDevice>>.broadcast();
 
-  // Expiry timer — ticks every 5 seconds to remove stale peers.
+  final StreamController<DiscoveryStatus> _statusController =
+      StreamController<DiscoveryStatus>.broadcast();
+
   Timer? _expiryTimer;
 
-  bool _active = false;
+  // ── Public stream accessors ───────────────────────────────────────
 
-  // ── DiscoveryService interface ────────────────────────────────────
+  Stream<DiscoveryStatus> get statusStream => _statusController.stream;
+  bool get isAdvertising => _isAdvertising;
+  bool get isScanning => _isScanning;
+
+  @override
+  Stream<List<PeerDevice>> get peersStream => _peersController.stream;
 
   @override
   bool get isActive => _active;
 
-  @override
-  Stream<PeerDevice> get peerStream =>
-      // The DiscoveryService interface emits individual PeerDevice events.
-      // We adapt our internal List<PeerDevice> stream to emit each peer
-      // individually on every list update.
-      _peersController.stream.expand((peers) => peers);
-
-  /// Also exposed for DiscoveryRepository use — emits full peer list snapshots.
-  Stream<List<PeerDevice>> get peersStream => _peersController.stream;
+  // ── Lifecycle ─────────────────────────────────────────────────────
 
   @override
   Future<void> startDiscovery() async {
     if (_active) return;
+    _active = true;
+
+    debugPrint(
+      '[EtherSynapse] BleSynapseDiscoveryService.startDiscovery() '
+      '— role: ${_role.name}, '
+      'device: "$_deviceName", '
+      'sessionId: ${_sessionId.toRadixString(16).padLeft(8, '0')}',
+    );
 
     await _requestPermissions();
 
-    _active = true;
-
-    // Start advertising this device so peers can find it.
-    await _startAdvertising();
-
-    // Start scanning for peers.
-    _startScanning();
-
-    // Start the expiry timer.
+    // Start expiry timer (fires every 5 s).
     _expiryTimer = Timer.periodic(const Duration(seconds: 5), (_) => _expirePeers());
+
+    if (_role == DeviceRole.receiver) {
+      // Detect real local capabilities BEFORE building the advertisement.
+      // These capabilities are encoded into the v2 payload so senders get
+      // actual device data from the scan result — no GATT or estimation.
+      await _detectAndAdvertise();
+    } else {
+      // Sender: scan only, no advertising.
+      _startScanning();
+    }
+  }
+
+  /// Detects local capabilities then starts advertising (receiver path).
+  Future<void> _detectAndAdvertise() async {
+    try {
+      _localCapabilities = await _capabilityService.detectLocalCapabilities(
+        displayName: _deviceName,
+      );
+      debugPrint(
+        '[EtherSynapse] Local capabilities detected: $_localCapabilities',
+      );
+      
+      // Start GATT Server with full local capabilities JSON payload
+      if (_localCapabilities != null) {
+        final success = await _gattService.startServer(_localCapabilities!);
+        debugPrint('[EtherSynapse] GATT Server started: $success');
+      }
+    } catch (e) {
+      debugPrint('[EtherSynapse] Capability detection error (non-fatal): $e');
+      // Proceed with null capabilities — codec will use zero flags.
+    }
+    await _startAdvertising();
   }
 
   @override
@@ -99,38 +145,47 @@ class BleSynapseDiscoveryService implements DiscoveryService {
     _expiryTimer?.cancel();
     _expiryTimer = null;
 
-    await _scanSubscription?.cancel();
-    _scanSubscription = null;
+    if (_role == DeviceRole.receiver) {
+      await _gattService.stopServer();
+    }
 
+    await _stopScanning();
     await _stopAdvertising();
 
     _peers.clear();
-    _emitPeers();
+    _localCapabilities = null;
+
+    debugPrint('[EtherSynapse] BleSynapseDiscoveryService stopped');
   }
 
-  // ── Permission handling ───────────────────────────────────────────
+  // ── Permissions ───────────────────────────────────────────────────
 
   Future<void> _requestPermissions() async {
-    if (!Platform.isAndroid) return;
-
-    // Determine which permissions are needed based on Android version.
-    // permission_handler uses the Android SDK version under the hood.
     final List<Permission> permissions;
 
-    if (await _isAndroid12OrHigher()) {
+    if (Platform.isAndroid && await _isAndroid12OrHigher()) {
       permissions = [
         Permission.bluetoothScan,
         Permission.bluetoothConnect,
         Permission.bluetoothAdvertise,
       ];
+      debugPrint('[EtherSynapse] Requesting Android 12+ BLE permissions');
     } else {
       permissions = [
         Permission.bluetooth,
         Permission.locationWhenInUse,
       ];
+      debugPrint('[EtherSynapse] Requesting legacy BLE permissions');
     }
 
     final statuses = await permissions.request();
+
+    for (final entry in statuses.entries) {
+      debugPrint(
+        '[EtherSynapse] Permission ${entry.key}: '
+        '${entry.value.isGranted ? "GRANTED" : "DENIED"}',
+      );
+    }
 
     final denied = statuses.entries
         .where((e) => !e.value.isGranted)
@@ -143,16 +198,13 @@ class BleSynapseDiscoveryService implements DiscoveryService {
         'Open Settings and grant the permissions to use discovery.',
       );
     }
+
+    debugPrint('[EtherSynapse] All BLE permissions granted');
   }
 
   Future<bool> _isAndroid12OrHigher() async {
     if (!Platform.isAndroid) return false;
-    // Permission.bluetoothScan exists as a runtime permission on API 31+.
-    // We check its status; on API < 31 the result will always be granted
-    // because the permission is install-time only.
     final status = await Permission.bluetoothScan.status;
-    // If the permission is not restricted (i.e. it's a real runtime permission),
-    // we're on Android 12+.
     return !status.isRestricted;
   }
 
@@ -162,33 +214,46 @@ class BleSynapseDiscoveryService implements DiscoveryService {
     try {
       final isSupported = await _peripheral.isSupported;
       if (!isSupported) {
-        // Device does not support BLE peripheral mode — skip advertising.
-        // This device can still discover others.
-        debugPrint('[EtherSynapse] BLE peripheral mode not supported on this device');
+        debugPrint(
+          '[EtherSynapse] BLE peripheral mode not supported on this device '
+          '— skipping advertising',
+        );
         return;
       }
 
+      // v2 payload: real capabilities encoded if available.
       final payload = BleAdvertisementCodec.encode(
-        deviceName: _deviceName,
+        displayName: _deviceName,
         platform: _localPlatform,
         sessionId: _sessionId,
+        capabilities: _localCapabilities,
       );
 
       final advertiseData = AdvertiseData(
-        // Service UUID is reserved — see docs/protocol/ble-discovery.md.
-        // We advertise without a service UUID and use manufacturer data
-        // as the primary identification mechanism.
-        serviceUuid: '',
+        serviceUuid: null, // null = omit; '' = crash (IllegalArgumentException)
         manufacturerId: AppConstants.bleCompanyId,
         manufacturerData: payload,
-        includeDeviceName: false, // We encode the name in payload ourselves.
+        includeDeviceName: false,
       );
 
       final advertiseSettings = AdvertiseSettings(
         advertiseMode: AdvertiseMode.advertiseModeBalanced,
         txPowerLevel: AdvertiseTxPower.advertiseTxPowerMedium,
-        connectable: false, // Discovery-only; connection happens over QUIC.
-        timeout: 0, // Advertise indefinitely.
+        connectable: false,
+        timeout: 0,
+      );
+
+      while (_isGlobalBleOperationPending) {
+        await Future.delayed(const Duration(milliseconds: 50));
+      }
+      _isGlobalBleOperationPending = true;
+
+      debugPrint(
+        '[EtherSynapse] Starting BLE advertising '
+        '(sessionId: ${_sessionId.toRadixString(16).padLeft(8, '0')}, '
+        'device: "$_deviceName", '
+        'caps: $_localCapabilities, '
+        'payloadBytes: ${payload.length})',
       );
 
       await _peripheral.start(
@@ -197,30 +262,39 @@ class BleSynapseDiscoveryService implements DiscoveryService {
       );
 
       _isAdvertising = true;
-      debugPrint('[EtherSynapse] BLE advertising started (sessionId: '
-          '${_sessionId.toRadixString(16).padLeft(8, '0')})');
+      _emitStatus();
+      debugPrint('[EtherSynapse] BLE advertising STARTED successfully');
     } catch (e) {
-      debugPrint('[EtherSynapse] BLE advertising failed: $e');
-      // Non-fatal — the device can still discover peers even if it cannot advertise.
+      debugPrint('[EtherSynapse] Failed to start BLE advertising: $e');
+      rethrow;
+    } finally {
+      _isGlobalBleOperationPending = false;
     }
   }
 
   Future<void> _stopAdvertising() async {
     if (!_isAdvertising) return;
+    
+    while (_isGlobalBleOperationPending) {
+      await Future.delayed(const Duration(milliseconds: 50));
+    }
+    _isGlobalBleOperationPending = true;
+
     try {
       await _peripheral.stop();
       _isAdvertising = false;
-      debugPrint('[EtherSynapse] BLE advertising stopped');
+      _emitStatus();
+      debugPrint('[EtherSynapse] BLE advertising STOPPED');
     } catch (e) {
-      debugPrint('[EtherSynapse] BLE advertising stop error: $e');
+      debugPrint('[EtherSynapse] Failed to stop BLE advertising: $e');
+    } finally {
+      _isGlobalBleOperationPending = false;
     }
   }
 
   // ── Scanning ──────────────────────────────────────────────────────
 
   void _startScanning() {
-    // Scan for all devices — we filter by manufacturer data in the handler.
-    // flutter_reactive_ble will call onError if BLE is off or permissions denied.
     _scanSubscription = _ble
         .scanForDevices(
           withServices: const [],
@@ -231,57 +305,86 @@ class BleSynapseDiscoveryService implements DiscoveryService {
           onError: _onScanError,
         );
 
-    debugPrint('[EtherSynapse] BLE scanning started');
+    _isScanning = true;
+    _emitStatus();
+    debugPrint('[EtherSynapse] BLE scanning STARTED');
+  }
+
+  Future<void> _stopScanning() async {
+    await _scanSubscription?.cancel();
+    _scanSubscription = null;
+    _isScanning = false;
+    _emitStatus();
+    debugPrint('[EtherSynapse] BLE scanning STOPPED');
   }
 
   void _onDeviceDiscovered(DiscoveredDevice device) {
-    // flutter_reactive_ble exposes manufacturer-specific data in
-    // serviceData and manufacturerData fields.
     final mfgData = device.manufacturerData;
     if (mfgData.isEmpty) return;
 
-    // flutter_reactive_ble strips the company ID prefix from manufacturer data;
-    // what we receive starts at our byte 0 (protocol version).
-    // However, on some Android versions it may include the company ID bytes.
-    // We try decoding at offset 0 first, then offset 2 as a fallback.
-    PeerDevice? peer = BleAdvertisementCodec.decode(
+    // flutter_reactive_ble strips the company-ID prefix on most Android
+    // versions. Try offset 0 first, fall back to offset 2.
+    var result = BleAdvertisementCodec.decode(
       data: mfgData,
       bleDeviceId: device.id,
       rssi: device.rssi,
     );
 
-    // Fallback: try skipping 2-byte company ID prefix.
-    if (peer == null && mfgData.length > 2) {
-      peer = BleAdvertisementCodec.decode(
+    if (result.peer == null && mfgData.length > 2) {
+      result = BleAdvertisementCodec.decode(
         data: mfgData.sublist(2),
         bleDeviceId: device.id,
         rssi: device.rssi,
       );
     }
 
+    final peer = result.peer;
     if (peer == null) return;
 
     // Ignore self-advertisements (same session ID).
     final selfId = _sessionId.toRadixString(16).padLeft(8, '0');
     if (peer.id == selfId) return;
 
-    // Upsert the peer with a fresh last-seen timestamp.
+    final isNewPeer = !_peers.containsKey(peer.id);
     final existing = _peers[peer.id];
+
+    // Merge — keep previously decoded capabilities if the new decode
+    // returned null (e.g. a v1 peer or truncated packet on retry).
+    final mergedCaps = peer.remoteCapabilities ??
+        existing?.peer.remoteCapabilities;
+
+    // Stamp the decoded capabilities with the peer's actual device name.
+    final namedCaps = mergedCaps?.copyWith(deviceName: peer.name);
+
     _peers[peer.id] = _PeerEntry(
       peer: existing != null
           ? existing.peer.copyWith(
               signalStrength: peer.signalStrength,
               name: peer.name,
+              bleAddress: peer.bleAddress,
+              remoteCapabilities: namedCaps,
             )
-          : peer,
+          : peer.copyWith(remoteCapabilities: namedCaps),
       lastSeen: DateTime.now(),
     );
+
+    if (isNewPeer) {
+      debugPrint(
+        '[EtherSynapse] Device DISCOVERED: '
+        'id=${peer.id}, name="${peer.name}", '
+        'platform=${peer.platform}, rssi=${peer.signalStrength} dBm, '
+        'caps=$namedCaps',
+      );
+    }
 
     _emitPeers();
   }
 
   void _onScanError(Object error) {
-    debugPrint('[EtherSynapse] BLE scan error: $error');
+    debugPrint('[EtherSynapse] BLE scan ERROR: $error');
+    _bluetoothEnabled = false;
+    _isScanning = false;
+    _emitStatus();
     _peersController.addError(
       DiscoveryException('BLE scan failed', cause: error),
     );
@@ -295,31 +398,59 @@ class BleSynapseDiscoveryService implements DiscoveryService {
     );
 
     final before = _peers.length;
-    _peers.removeWhere((_, entry) => entry.lastSeen.isBefore(cutoff));
+    final expired = _peers.entries
+        .where((e) => e.value.lastSeen.isBefore(cutoff))
+        .map((e) => e.key)
+        .toList();
 
-    if (_peers.length != before) {
-      debugPrint('[EtherSynapse] Expired ${before - _peers.length} stale peer(s)');
-      _emitPeers();
+    for (final id in expired) {
+      final name = _peers[id]?.peer.name ?? id;
+      _peers.remove(id);
+      debugPrint('[EtherSynapse] Device LOST (timeout): id=$id, name="$name"');
     }
+
+    if (_peers.length != before) _emitPeers();
   }
 
   // ── Stream emission ───────────────────────────────────────────────
 
   void _emitPeers() {
     if (_peersController.isClosed) return;
-    final snapshot = _peers.values.map((e) => e.peer).toList(growable: false);
-    _peersController.add(snapshot);
+    _peersController.add(
+      _peers.values.map((e) => e.peer).toList(growable: false),
+    );
   }
 
-  /// Disposes resources. Call when the owning provider is disposed.
+  void _emitStatus() {
+    if (_statusController.isClosed) return;
+    _statusController.add(DiscoveryStatus(
+      isAdvertising: _isAdvertising,
+      isScanning: _isScanning,
+      bluetoothEnabled: _bluetoothEnabled,
+    ));
+  }
+
   void dispose() {
     stopDiscovery();
     _peersController.close();
+    _statusController.close();
   }
 }
 
-/// Internal record pairing a [PeerDevice] with its last-seen timestamp
-/// for expiry tracking.
+/// Status snapshot emitted by [BleSynapseDiscoveryService.statusStream].
+class DiscoveryStatus {
+  const DiscoveryStatus({
+    required this.isAdvertising,
+    required this.isScanning,
+    required this.bluetoothEnabled,
+  });
+
+  final bool isAdvertising;
+  final bool isScanning;
+  final bool bluetoothEnabled;
+}
+
+/// Internal record pairing a [PeerDevice] with its last-seen timestamp.
 class _PeerEntry {
   const _PeerEntry({required this.peer, required this.lastSeen});
 

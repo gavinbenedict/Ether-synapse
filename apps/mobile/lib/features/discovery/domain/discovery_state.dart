@@ -11,22 +11,35 @@ final class DiscoveryState {
   const DiscoveryState({
     this.peers = const [],
     this.isScanning = false,
+    this.isAdvertising = false,
+    this.bluetoothEnabled = true,
     this.error,
+    this.lastUpdated,
   });
 
   /// Currently visible peers. Deduplicated and sorted by signal strength.
   final List<PeerDevice> peers;
 
-  /// Whether an active BLE scan or mDNS listen is running.
+  /// Whether an active BLE scan is running.
   final bool isScanning;
+
+  /// Whether BLE advertising is active.
+  final bool isAdvertising;
+
+  /// Whether Bluetooth is enabled on this device.
+  final bool bluetoothEnabled;
 
   /// Non-null if discovery has encountered an unrecoverable error.
   final String? error;
+
+  /// When the peer list was last updated (for display).
+  final DateTime? lastUpdated;
 
   // ── Convenience ───────────────────────────────────────────────────
 
   bool get hasPeers => peers.isNotEmpty;
   bool get hasError => error != null;
+  bool get isActive => isScanning || isAdvertising;
 
   /// Sorted peers — stronger signal first; unknown signal at the end.
   List<PeerDevice> get sortedPeers {
@@ -42,13 +55,19 @@ final class DiscoveryState {
   DiscoveryState copyWith({
     List<PeerDevice>? peers,
     bool? isScanning,
+    bool? isAdvertising,
+    bool? bluetoothEnabled,
     String? error,
     bool clearError = false,
+    DateTime? lastUpdated,
   }) {
     return DiscoveryState(
       peers: peers ?? this.peers,
       isScanning: isScanning ?? this.isScanning,
+      isAdvertising: isAdvertising ?? this.isAdvertising,
+      bluetoothEnabled: bluetoothEnabled ?? this.bluetoothEnabled,
       error: clearError ? null : (error ?? this.error),
+      lastUpdated: lastUpdated ?? this.lastUpdated,
     );
   }
 
@@ -58,8 +77,11 @@ final class DiscoveryState {
       other is DiscoveryState &&
           listEquals(other.peers, peers) &&
           other.isScanning == isScanning &&
+          other.isAdvertising == isAdvertising &&
+          other.bluetoothEnabled == bluetoothEnabled &&
           other.error == error;
 
   @override
-  int get hashCode => Object.hash(peers, isScanning, error);
+  int get hashCode =>
+      Object.hash(peers, isScanning, isAdvertising, bluetoothEnabled, error);
 }

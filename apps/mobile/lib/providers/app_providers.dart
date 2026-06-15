@@ -1,6 +1,13 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../features/settings/presentation/settings_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+final sharedPreferencesProvider = Provider<SharedPreferences>((ref) {
+  throw UnimplementedError('Initialize in main.dart');
+});
+
 /// Global Riverpod providers used across the application.
 ///
 /// Feature-specific providers live in their respective
@@ -19,10 +26,11 @@ final themeModeProvider = StateProvider<ThemeMode>((ref) => ThemeMode.system);
 
 /// The user-configured display name for this device.
 ///
-/// Shown in the peer list of remote devices.
-/// Default is derived from the host platform at runtime.
-/// Persisted to local preferences (persistence layer is not yet implemented).
-final deviceNameProvider = StateProvider<String>((ref) => 'My Device');
+/// Derived from [settingsProvider] so it always reflects the persisted value.
+/// Any change in Settings propagates here immediately.
+final deviceNameProvider = Provider<String>((ref) {
+  return ref.watch(settingsProvider).deviceName;
+});
 
 // ── App lifecycle ─────────────────────────────────────────────────
 

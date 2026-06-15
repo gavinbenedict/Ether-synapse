@@ -1,5 +1,4 @@
 import '../../../shared/models/transfer_job.dart';
-import '../../../shared/models/transfer_status.dart';
 
 /// Data layer for the transfer feature.
 ///

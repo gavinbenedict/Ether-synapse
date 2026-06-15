@@ -52,13 +52,6 @@ class PairingNotifier extends StateNotifier<PairingState> {
     // TODO(impl): await _repository.cancel();
     state = const PairingState();
   }
-
-  void _onError(Object error) {
-    state = state.copyWith(
-      status: PairingStatus.failed,
-      error: error.toString(),
-    );
-  }
 }
 
 /// Provider for [PairingNotifier].

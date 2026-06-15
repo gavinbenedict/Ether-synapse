@@ -1,7 +1,7 @@
 import 'dart:io';
 
 import '../../../shared/models/peer_device.dart';
-import '../../../services/discovery_service.dart';
+import '../../../shared/models/device_role.dart';
 import 'ble_discovery_service.dart';
 
 /// Concrete implementation of [DiscoveryRepository].
@@ -17,9 +17,11 @@ import 'ble_discovery_service.dart';
 class DiscoveryRepositoryImpl {
   DiscoveryRepositoryImpl({
     required String deviceName,
+    required DeviceRole role,
   }) : _service = BleSynapseDiscoveryService(
           deviceName: deviceName,
           localPlatform: _detectLocalPlatform(),
+          role: role,
         );
 
   final BleSynapseDiscoveryService _service;
@@ -31,6 +33,9 @@ class DiscoveryRepositoryImpl {
   Future<void> stopDiscovery() => _service.stopDiscovery();
 
   Stream<List<PeerDevice>> get peersStream => _service.peersStream;
+
+  /// Exposes the underlying service for status stream subscription.
+  BleSynapseDiscoveryService get service => _service;
 
   void dispose() => _service.dispose();
 

@@ -1,0 +1,20 @@
+# macOS
+.DS_Store
+
+# Flutter
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+
+# Android
+.gradle/
+local.properties
+
+# IntelliJ / VS Code
+.idea/
+.vscode/
+
+# Generated
+GeneratedPluginRegistrant.java

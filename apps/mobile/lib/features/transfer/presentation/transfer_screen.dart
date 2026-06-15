@@ -16,13 +16,35 @@ import '../../../core/theme/app_theme.dart';
 ///   - Active transfer progress cards
 ///   - Completed transfer history
 ///   - Empty state when idle
-class TransferScreen extends ConsumerWidget {
-  const TransferScreen({super.key, required this.peerId});
+class TransferScreen extends ConsumerStatefulWidget {
+  const TransferScreen({
+    super.key, 
+    required this.peerId,
+    required this.hostIp,
+    required this.isHost,
+  });
 
   final String peerId;
+  final String hostIp;
+  final bool isHost;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<TransferScreen> createState() => _TransferScreenState();
+}
+
+class _TransferScreenState extends ConsumerState<TransferScreen> {
+  @override
+  void initState() {
+    super.initState();
+    if (widget.isHost) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        ref.read(transferProvider.notifier).startReceiver(widget.hostIp);
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
     final state = ref.watch(transferProvider);
     final notifier = ref.read(transferProvider.notifier);
 
@@ -36,8 +58,8 @@ class TransferScreen extends ConsumerWidget {
               onCancel: notifier.cancelTransfer,
             )
           : const _EmptyState(),
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: state.isPickingFile ? null : notifier.pickAndSendFile,
+      floatingActionButton: widget.isHost ? null : FloatingActionButton.extended(
+        onPressed: state.isPickingFile ? null : () => notifier.pickAndSendFile(widget.hostIp),
         icon: state.isPickingFile
             ? const SizedBox(
                 width: 20,

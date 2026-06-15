@@ -1,7 +1,6 @@
 import 'package:flutter/foundation.dart';
 
 import '../../../shared/models/transfer_job.dart';
-import '../../../shared/models/transfer_status.dart';
 
 /// Domain state for the transfer feature.
 ///

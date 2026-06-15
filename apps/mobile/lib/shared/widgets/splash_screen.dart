@@ -26,7 +26,7 @@ class _SplashScreenState extends State<SplashScreen> {
     // Allow a single frame to render before navigating.
     await Future<void>.delayed(const Duration(milliseconds: 400));
     if (mounted) {
-      context.goNamed(AppRouteNames.discovery);
+      context.goNamed(AppRouteNames.home);
     }
   }
 

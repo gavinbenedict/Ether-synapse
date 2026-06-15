@@ -23,7 +23,7 @@ abstract interface class DiscoveryService {
   /// Emits discovered peers. The stream remains open until [stopDiscovery].
   ///
   /// May emit duplicate peers; deduplication is the consumer's responsibility.
-  Stream<PeerDevice> get peerStream;
+  Stream<List<PeerDevice>> get peersStream;
 
   /// Returns `true` if discovery is currently active.
   bool get isActive;

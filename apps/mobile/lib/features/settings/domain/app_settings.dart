@@ -1,4 +1,4 @@
-/// Domain model for app settings.
+import '../../../shared/models/device_role.dart';
 ///
 /// Persisted to local device storage only — never transmitted.
 /// No account IDs, no cloud sync, no telemetry.
@@ -8,6 +8,7 @@ final class AppSettings {
     this.themePreference = ThemePreference.system,
     this.defaultSaveDirectory,
     this.showTransferHistory = true,
+    this.lastRole,
   });
 
   /// The display name broadcast during discovery.
@@ -24,12 +25,18 @@ final class AppSettings {
   /// Whether to show a history of completed transfers on the transfer screen.
   final bool showTransferHistory;
 
+  /// Last role the user selected (Send or Receive).
+  ///
+  /// Restored on next launch as the pre-selected role on the home screen.
+  final DeviceRole? lastRole;
+
   AppSettings copyWith({
     String? deviceName,
     ThemePreference? themePreference,
     String? defaultSaveDirectory,
     bool? showTransferHistory,
     bool clearSaveDirectory = false,
+    DeviceRole? lastRole,
   }) {
     return AppSettings(
       deviceName: deviceName ?? this.deviceName,
@@ -38,6 +45,7 @@ final class AppSettings {
           ? null
           : (defaultSaveDirectory ?? this.defaultSaveDirectory),
       showTransferHistory: showTransferHistory ?? this.showTransferHistory,
+      lastRole: lastRole ?? this.lastRole,
     );
   }
 
@@ -48,7 +56,8 @@ final class AppSettings {
           other.deviceName == deviceName &&
           other.themePreference == themePreference &&
           other.defaultSaveDirectory == defaultSaveDirectory &&
-          other.showTransferHistory == showTransferHistory;
+          other.showTransferHistory == showTransferHistory &&
+          other.lastRole == lastRole;
 
   @override
   int get hashCode => Object.hash(
@@ -56,6 +65,7 @@ final class AppSettings {
         themePreference,
         defaultSaveDirectory,
         showTransferHistory,
+        lastRole,
       );
 }
 

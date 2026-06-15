@@ -1,5 +1,7 @@
 import 'package:flutter/foundation.dart';
 
+import 'transfer_status.dart';
+
 /// Represents a single in-progress or completed file transfer.
 ///
 /// This is a pure value object updated by the Rust core via bridge events.
