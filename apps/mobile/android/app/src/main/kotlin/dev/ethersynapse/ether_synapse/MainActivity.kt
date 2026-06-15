@@ -1,17 +1,22 @@
 package dev.ethersynapse.ether_synapse
 
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.Uri
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.Settings
 import android.util.Log
 import androidx.annotation.RequiresApi
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
+import java.io.File
 
 class MainActivity : FlutterActivity() {
 
@@ -19,6 +24,7 @@ class MainActivity : FlutterActivity() {
         private const val CHANNEL_SETTINGS     = "dev.ethersynapse/settings"
         private const val CHANNEL_CAPABILITIES = "dev.ethersynapse/capabilities"
         private const val CHANNEL_GATT         = "dev.ethersynapse/gatt"
+        private const val CHANNEL_MEDIA        = "dev.ethersynapse/media"
     }
     
     private var gattServerManager: GattServerManager? = null
@@ -30,6 +36,7 @@ class MainActivity : FlutterActivity() {
         registerCapabilitiesChannel(flutterEngine)
         registerGattChannel(flutterEngine)
         registerWifiDirectChannel(flutterEngine)
+        registerMediaChannel(flutterEngine)
     }
 
     // ── Settings channel ──────────────────────────────────────────────────────
@@ -153,7 +160,125 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    // ── Media / file-save channel ─────────────────────────────────────────────
+    //
+    // Called by Dart after a file has been fully received over TCP.
+    // Copies the file from app-private temp storage into the appropriate
+    // public MediaStore collection (API 29+) or public directory (API <29)
+    // and returns the final public path back to Dart.
+
+    private fun registerMediaChannel(engine: FlutterEngine) {
+        MethodChannel(engine.dartExecutor.binaryMessenger, CHANNEL_MEDIA)
+            .setMethodCallHandler { call, result ->
+                if (call.method == "saveToPublic") {
+                    val srcPath   = call.argument<String>("srcPath")   ?: return@setMethodCallHandler result.error("BAD_ARGS", "srcPath missing", null)
+                    val fileName  = call.argument<String>("fileName")  ?: return@setMethodCallHandler result.error("BAD_ARGS", "fileName missing", null)
+                    val mimeType  = call.argument<String>("mimeType")  ?: "application/octet-stream"
+                    try {
+                        val publicPath = saveFileToPublic(srcPath, fileName, mimeType)
+                        Log.d("EtherSynapse", "[FILE SAVE] public path: $publicPath")
+                        result.success(publicPath)
+                    } catch (e: Exception) {
+                        Log.e("EtherSynapse", "[FILE SAVE] failed: $e")
+                        result.error("SAVE_FAILED", e.message, null)
+                    }
+                } else {
+                    result.notImplemented()
+                }
+            }
+    }
+
+    /** Saves [srcPath] to a public folder determined by [mimeType]. Returns the final path. */
+    private fun saveFileToPublic(srcPath: String, fileName: String, mimeType: String): String {
+        val srcFile = File(srcPath)
+        require(srcFile.exists()) { "Source file not found: $srcPath" }
+
+        val category = mimeType.substringBefore("/")
+
+        return if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // API 29+: Use MediaStore
+            saveViaMediaStore(srcFile, fileName, mimeType, category)
+        } else {
+            // API <29: Write directly to public directory
+            saveLegacy(srcFile, fileName, category)
+        }
+    }
+
+    @RequiresApi(Build.VERSION_CODES.Q)
+    private fun saveViaMediaStore(
+        src: File, fileName: String, mimeType: String, category: String
+    ): String {
+        val (collection, relPath) = when (category) {
+            "image" -> Pair(
+                MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                Environment.DIRECTORY_PICTURES + "/EtherSynapse"
+            )
+            "video" -> Pair(
+                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                Environment.DIRECTORY_MOVIES + "/EtherSynapse"
+            )
+            "audio" -> Pair(
+                MediaStore.Audio.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                Environment.DIRECTORY_MUSIC + "/EtherSynapse"
+            )
+            else    -> Pair(
+                MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY),
+                Environment.DIRECTORY_DOWNLOADS + "/EtherSynapse"
+            )
+        }
+
+        val values = ContentValues().apply {
+            put(MediaStore.MediaColumns.DISPLAY_NAME, fileName)
+            put(MediaStore.MediaColumns.MIME_TYPE, mimeType)
+            put(MediaStore.MediaColumns.RELATIVE_PATH, relPath)
+            put(MediaStore.MediaColumns.IS_PENDING, 1)
+        }
+
+        val uri: Uri = contentResolver.insert(collection, values)
+            ?: throw RuntimeException("MediaStore insert returned null for $fileName")
+
+        contentResolver.openOutputStream(uri)?.use { out ->
+            src.inputStream().use { it.copyTo(out) }
+        }
+
+        values.clear()
+        values.put(MediaStore.MediaColumns.IS_PENDING, 0)
+        contentResolver.update(uri, values, null, null)
+
+        Log.d("EtherSynapse", "[MEDIASTORE] inserted: $uri")
+
+        // Resolve to real path for Dart (best effort)
+        return try {
+            contentResolver.query(uri, arrayOf(MediaStore.MediaColumns.DATA), null, null, null)
+                ?.use { cursor ->
+                    if (cursor.moveToFirst()) cursor.getString(0) else uri.toString()
+                } ?: uri.toString()
+        } catch (_: Exception) {
+            uri.toString()
+        }
+    }
+
+    private fun saveLegacy(src: File, fileName: String, category: String): String {
+        val dir = when (category) {
+            "image" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_PICTURES)
+            "video" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+            "audio" -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MUSIC)
+            else    -> Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS)
+        }
+        val dest = File(File(dir, "EtherSynapse").also { it.mkdirs() }, fileName)
+        src.copyTo(dest, overwrite = true)
+
+        // Notify MediaScanner so Gallery picks it up immediately
+        val intent = Intent(Intent.ACTION_MEDIA_SCANNER_SCAN_FILE)
+        intent.data = Uri.fromFile(dest)
+        sendBroadcast(intent)
+
+        Log.d("EtherSynapse", "[FILE SAVE] legacy path: ${dest.absolutePath}")
+        return dest.absolutePath
+    }
+
     private fun detectCapabilities(): Map<String, Any?> {
+
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as WifiManager
 

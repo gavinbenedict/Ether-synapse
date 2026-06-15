@@ -5,46 +5,78 @@ import 'package:flutter/services.dart';
 
 import '../shared/models/device_capabilities.dart';
 
-/// Dart wrapper for the native GATT Server.
+/// Dart wrapper for the native GATT Server (hosted on the Receiver).
+///
+/// The MethodChannel handler is registered once at class initialization to
+/// avoid the bug where calling [onSenderCapabilitiesReceived] multiple times
+/// would overwrite the handler and lose events.
 class GattService {
   static const _channel = MethodChannel('dev.ethersynapse/gatt');
-  
+
+  // ── Static stream controller (broadcast, alive for the app lifetime) ──────
+  static final _capabilitiesController =
+      StreamController<DeviceCapabilities>.broadcast();
+
   /// Stream of capabilities received from a sender via GATT write.
-  /// The payload is a [DeviceCapabilities] object.
-  static Stream<DeviceCapabilities> get onSenderCapabilitiesReceived {
+  ///
+  /// Fires once per connected sender after the sender writes its
+  /// [DeviceCapabilities] JSON to the GATT characteristic.
+  ///
+  /// Subscribe in [ReceiveNotifier] to know when to navigate to TransferScreen.
+  static Stream<DeviceCapabilities> get onSenderCapabilitiesReceived =>
+      _capabilitiesController.stream;
+
+  // ── One-time MethodChannel handler registration ───────────────────────────
+  /// Must be called once at app startup (before any subscriptions are added).
+  ///
+  /// Called automatically by [_GattServiceInit] via the static initializer.
+  static void _registerHandler() {
     _channel.setMethodCallHandler((call) async {
-      debugPrint('[EtherSynapse] GATT Service: MethodChannel call: ${call.method}');
+      debugPrint('[EtherSynapse] GattService: MethodChannel call: ${call.method}');
       if (call.method == 'onSenderCapabilitiesReceived') {
         try {
           final args = call.arguments as Map;
           final jsonStr = args['capabilities'] as String;
-          debugPrint('[EtherSynapse] GATT Service: Received capabilities from native: $jsonStr');
+          debugPrint(
+            '[EtherSynapse] GattService: Received sender capabilities: $jsonStr',
+          );
           final map = jsonDecode(jsonStr) as Map<String, dynamic>;
           final caps = DeviceCapabilities.fromJson(map);
-          _controller.add(caps);
-        } catch (e) {
-          debugPrint('[EtherSynapse] Error decoding sender capabilities: $e');
+          debugPrint(
+            '[EtherSynapse] GattService: Decoded sender capabilities — '
+            'name: ${caps.deviceName}, ip: ${caps.localIpAddress}',
+          );
+          _capabilitiesController.add(caps);
+        } catch (e, st) {
+          debugPrint('[EtherSynapse] GattService: Error decoding capabilities: $e\n$st');
         }
       }
     });
-    return _controller.stream;
+    debugPrint('[EtherSynapse] GattService: MethodChannel handler registered');
   }
-  
-  static final _controller = StreamController<DeviceCapabilities>.broadcast();
+
+  // Register the handler once when the class is first loaded.
+  static final _handlerRegistration = _registerHandler();
+
+  // Force the static initializer to run.
+  static void init() => _handlerRegistration;
+
+  // ── Instance methods ──────────────────────────────────────────────────────
 
   /// Starts the GATT server with the local capabilities JSON payload.
+  ///
   /// Remote senders connecting to the GATT server will read this payload.
   Future<bool> startServer(DeviceCapabilities localCapabilities) async {
     try {
       final jsonStr = jsonEncode(localCapabilities.toJson());
-      debugPrint('[EtherSynapse] GATT Service: Starting server with capabilities: $jsonStr');
+      debugPrint('[EtherSynapse] GattService: Starting server: $jsonStr');
       final result = await _channel.invokeMethod<bool>('startGattServer', {
         'capabilitiesJson': jsonStr,
       });
-      debugPrint('[EtherSynapse] GATT Service: startServer result: $result');
+      debugPrint('[EtherSynapse] GattService: startServer result: $result');
       return result ?? false;
     } on PlatformException catch (e) {
-      debugPrint('[EtherSynapse] Failed to start GATT server: $e');
+      debugPrint('[EtherSynapse] GattService: Failed to start GATT server: $e');
       return false;
     }
   }
@@ -54,7 +86,7 @@ class GattService {
     try {
       await _channel.invokeMethod('stopGattServer');
     } on PlatformException catch (e) {
-      debugPrint('[EtherSynapse] Failed to stop GATT server: $e');
+      debugPrint('[EtherSynapse] GattService: Failed to stop GATT server: $e');
     }
   }
 
@@ -64,15 +96,15 @@ class GattService {
     required Uint8List manufacturerData,
   }) async {
     try {
-      debugPrint('[EtherSynapse] GATT Service: Starting native advertising...');
+      debugPrint('[EtherSynapse] GattService: Starting native advertising...');
       final result = await _channel.invokeMethod<bool>('startAdvertising', {
         'manufacturerId': manufacturerId,
         'manufacturerData': manufacturerData,
       });
-      debugPrint('[EtherSynapse] GATT Service: startAdvertising result: $result');
+      debugPrint('[EtherSynapse] GattService: startAdvertising result: $result');
       return result ?? false;
     } on PlatformException catch (e) {
-      debugPrint('[EtherSynapse] Failed to start native advertising: $e');
+      debugPrint('[EtherSynapse] GattService: Failed to start advertising: $e');
       return false;
     }
   }
@@ -81,9 +113,9 @@ class GattService {
   Future<void> stopAdvertising() async {
     try {
       await _channel.invokeMethod('stopAdvertising');
-      debugPrint('[EtherSynapse] GATT Service: Native advertising stopped');
+      debugPrint('[EtherSynapse] GattService: Native advertising stopped');
     } on PlatformException catch (e) {
-      debugPrint('[EtherSynapse] Failed to stop native advertising: $e');
+      debugPrint('[EtherSynapse] GattService: Failed to stop advertising: $e');
     }
   }
 }

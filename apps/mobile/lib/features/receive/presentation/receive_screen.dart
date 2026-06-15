@@ -8,14 +8,17 @@ import '../../../shared/widgets/app_scaffold.dart';
 import '../../../shared/widgets/permission_gate.dart';
 import '../../../services/system_settings_service.dart';
 import '../../../core/theme/app_theme.dart';
+import '../../../core/router/routes.dart';
 
 /// Receive mode screen.
 ///
 /// Shows this device's advertising status and waits for a sender to
 /// discover it and initiate a transfer negotiation.
 ///
-/// BLE advertising starts automatically on screen entry.
-/// Screen wake-lock is requested to keep the display on while waiting.
+/// Once the sender writes its capabilities over GATT, [ReceiveNotifier]
+/// sets [ReceiveState.navigateToTransfer] = true. This screen watches for
+/// that flag via [ref.listen] and navigates to TransferScreen(isHost: true),
+/// which starts the TCP server and accepts the incoming connection.
 class ReceiveScreen extends ConsumerStatefulWidget {
   const ReceiveScreen({super.key});
 
@@ -39,7 +42,10 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen>
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    debugPrint('[EtherSynapse] ReceiveScreen.didChangeAppLifecycleState($state), mounted: $mounted');
+    debugPrint(
+      '[EtherSynapse] ReceiveScreen.didChangeAppLifecycleState($state), '
+      'mounted: $mounted',
+    );
     if (!mounted) return;
 
     if (state == AppLifecycleState.resumed) {
@@ -54,16 +60,13 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen>
   void dispose() {
     debugPrint('[EtherSynapse] ReceiveScreen.dispose() start');
     WidgetsBinding.instance.removeObserver(this);
-    
-    // Use ref.read safely before super.dispose().
-    // Note: for autoDispose providers, the notifier will also be disposed
-    // shortly after this widget is unmounted.
     try {
       ref.read(receiveProvider.notifier).stopReceiving();
     } catch (e) {
-      debugPrint('[EtherSynapse] ReceiveScreen.dispose() error calling stopReceiving: $e');
+      debugPrint(
+        '[EtherSynapse] ReceiveScreen.dispose() error calling stopReceiving: $e',
+      );
     }
-
     super.dispose();
     debugPrint('[EtherSynapse] ReceiveScreen.dispose() complete');
   }
@@ -75,67 +78,108 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen>
     final cs = Theme.of(context).colorScheme;
     final tt = Theme.of(context).textTheme;
 
-    return AppScaffold(
-      title: 'Ready to Receive',
-      leading: BackButton(onPressed: () => context.pop()),
-      body: PermissionGate(
-        condition: state.bluetoothEnabled,
-        title: 'Bluetooth Required',
-        subtitle:
-            'Enable Bluetooth so nearby senders can discover this device.',
-        actionLabel: 'Enable Bluetooth',
-        settingsAction: SystemSettingsService.actionBluetooth,
-        onAction: () =>
-            ref.read(receiveProvider.notifier).startReceiving(),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
-          children: [
-            const Spacer(),
+    // ── Navigation trigger ──────────────────────────────────────────────
+    // Watch navigateToTransfer and push to TransferScreen(isHost: true)
+    // once the sender has completed GATT capability exchange.
+    ref.listen<ReceiveState>(receiveProvider, (previous, next) {
+      if (next.navigateToTransfer && !(previous?.navigateToTransfer ?? false)) {
+        final hostIp = next.localIpAddress ?? '';
+        debugPrint(
+          '[TCP SERVER] ReceiveScreen: sender connected via GATT — '
+          'navigating to TransferScreen(isHost=true, hostIp=$hostIp)',
+        );
 
-            // ── Pulsing ready indicator ──────────────────────────
-            Center(child: _AdvertisingPulse(isAdvertising: state.isAdvertising)),
+        // Clear the flag so we don't navigate again if the widget rebuilds.
+        ref.read(receiveProvider.notifier).clearNavigateToTransfer();
 
-            const SizedBox(height: AppTheme.spacingXxl),
+        // Navigate to TransferScreen as the TCP host (receiver).
+        context.pushNamed(
+          AppRouteNames.transfer,
+          pathParameters: {'peerId': 'receiver'},
+          queryParameters: {
+            'hostIp': hostIp,
+            'isHost': 'true',
+          },
+        );
+      }
+    });
 
-            // ── Device name ───────────────────────────────────────
-            Center(
-              child: Text(
-                deviceName,
-                style: tt.headlineMedium?.copyWith(
-                  color: cs.onSurface,
-                  fontWeight: FontWeight.bold,
+    return PopScope(
+      canPop: true,
+      child: AppScaffold(
+        title: 'Ready to Receive',
+        leading: BackButton(onPressed: () => context.pop()),
+        body: PermissionGate(
+          condition: state.bluetoothEnabled,
+          title: 'Bluetooth Required',
+          subtitle:
+              'Enable Bluetooth so nearby senders can discover this device.',
+          actionLabel: 'Enable Bluetooth',
+          settingsAction: SystemSettingsService.actionBluetooth,
+          onAction: () =>
+              ref.read(receiveProvider.notifier).startReceiving(),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Spacer(),
+
+              // ── Pulsing ready indicator ──────────────────────────
+              Center(
+                child: _AdvertisingPulse(isAdvertising: state.isAdvertising),
+              ),
+
+              const SizedBox(height: AppTheme.spacingXxl),
+
+              // ── Device name ───────────────────────────────────────
+              Center(
+                child: Text(
+                  deviceName,
+                  style: tt.headlineMedium?.copyWith(
+                    color: cs.onSurface,
+                    fontWeight: FontWeight.bold,
+                  ),
+                  textAlign: TextAlign.center,
                 ),
-                textAlign: TextAlign.center,
               ),
-            ),
-            const SizedBox(height: AppTheme.spacingXs),
-            Center(
-              child: Text(
-                state.isAdvertising
-                    ? 'This device is visible to nearby senders'
-                    : 'Starting advertising…',
-                style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
-                textAlign: TextAlign.center,
-              ),
-            ),
-
-            const SizedBox(height: AppTheme.spacingXxl),
-
-            // ── Status chips ──────────────────────────────────────
-            _StatusChips(state: state),
-
-            const Spacer(),
-
-            // ── Error ─────────────────────────────────────────────
-            if (state.hasError)
-              _ErrorCard(
-                error: state.error!,
-                onRetry: () =>
-                    ref.read(receiveProvider.notifier).startReceiving(),
+              const SizedBox(height: AppTheme.spacingXs),
+              Center(
+                child: Text(
+                  state.isAdvertising
+                      ? 'This device is visible to nearby senders'
+                      : 'Starting advertising…',
+                  style: tt.bodyMedium?.copyWith(color: cs.onSurfaceVariant),
+                  textAlign: TextAlign.center,
+                ),
               ),
 
-            const SizedBox(height: AppTheme.spacingXxl),
-          ],
+              const SizedBox(height: AppTheme.spacingXxl),
+
+              // ── Status chips ──────────────────────────────────────
+              _StatusChips(state: state),
+
+              // ── Sender connected banner ───────────────────────────
+              if (state.senderCapabilities != null) ...[
+                const SizedBox(height: AppTheme.spacingMd),
+                _SenderConnectedBanner(
+                  senderName: state.senderCapabilities!.deviceName,
+                  cs: cs,
+                  tt: tt,
+                ),
+              ],
+
+              const Spacer(),
+
+              // ── Error ─────────────────────────────────────────────
+              if (state.hasError)
+                _ErrorCard(
+                  error: state.error!,
+                  onRetry: () =>
+                      ref.read(receiveProvider.notifier).startReceiving(),
+                ),
+
+              const SizedBox(height: AppTheme.spacingXxl),
+            ],
+          ),
         ),
       ),
     );
@@ -239,6 +283,44 @@ class _StatusChips extends StatelessWidget {
   }
 }
 
+class _SenderConnectedBanner extends StatelessWidget {
+  const _SenderConnectedBanner({
+    required this.senderName,
+    required this.cs,
+    required this.tt,
+  });
+
+  final String senderName;
+  final ColorScheme cs;
+  final TextTheme tt;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: AppTheme.spacingMd),
+      child: Card(
+        color: cs.secondaryContainer,
+        child: Padding(
+          padding: const EdgeInsets.all(AppTheme.spacingMd),
+          child: Row(
+            children: [
+              Icon(Icons.check_circle_rounded,
+                  color: cs.onSecondaryContainer, size: 20),
+              const SizedBox(width: AppTheme.spacingSm),
+              Expanded(
+                child: Text(
+                  '$senderName connected — starting transfer…',
+                  style: tt.bodyMedium?.copyWith(color: cs.onSecondaryContainer),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _Chip extends StatelessWidget {
   const _Chip({
     required this.icon,
@@ -298,16 +380,19 @@ class _ErrorCard extends StatelessWidget {
               Icon(Icons.warning_rounded, color: cs.onErrorContainer),
               const SizedBox(width: 8),
               Expanded(
-                child: Text(error,
-                    style: tt.bodySmall
-                        ?.copyWith(color: cs.onErrorContainer)),
+                child: Text(
+                  error,
+                  style: tt.bodySmall?.copyWith(color: cs.onErrorContainer),
+                ),
               ),
             ]),
             const SizedBox(height: AppTheme.spacingSm),
             TextButton(
               onPressed: onRetry,
-              child: Text('Retry',
-                  style: TextStyle(color: cs.onErrorContainer)),
+              child: Text(
+                'Retry',
+                style: TextStyle(color: cs.onErrorContainer),
+              ),
             ),
           ],
         ),

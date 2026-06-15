@@ -3,18 +3,20 @@ import 'package:flutter/foundation.dart';
 import '../../../shared/models/transfer_job.dart';
 
 /// Domain state for the transfer feature.
-///
-/// Immutable snapshot updated by [TransferNotifier] as bridge events arrive.
 @immutable
 final class TransferState {
   const TransferState({
     this.jobs = const [],
+    this.history = const [],
     this.isPickingFile = false,
     this.error,
   });
 
-  /// All transfer jobs in the current session (active + completed).
+  /// Active in-session transfer jobs (in-flight or just completed).
   final List<TransferJob> jobs;
+
+  /// Persisted transfer history (loaded from SharedPreferences on init).
+  final List<TransferJob> history;
 
   /// `true` while the file picker sheet is open.
   final bool isPickingFile;
@@ -24,21 +26,17 @@ final class TransferState {
 
   // ── Convenience ───────────────────────────────────────────────────
 
-  /// Jobs currently in-flight (offering or transferring).
   List<TransferJob> get activeJobs =>
       jobs.where((j) => j.status.isActive).toList();
 
-  /// Jobs that have completed (success or failure).
   List<TransferJob> get completedJobs =>
       jobs.where((j) => j.isTerminal).toList();
 
-  /// Whether any transfer is currently in progress.
   bool get hasActiveTransfer => activeJobs.isNotEmpty;
-
   bool get hasJobs => jobs.isNotEmpty;
+  bool get hasHistory => history.isNotEmpty;
   bool get hasError => error != null;
 
-  /// Aggregate progress across all active jobs (0.0–1.0).
   double get overallProgress {
     if (activeJobs.isEmpty) return 0;
     final total = activeJobs.fold<double>(0, (sum, j) => sum + j.progress);
@@ -47,18 +45,19 @@ final class TransferState {
 
   TransferState copyWith({
     List<TransferJob>? jobs,
+    List<TransferJob>? history,
     bool? isPickingFile,
     String? error,
     bool clearError = false,
   }) {
     return TransferState(
       jobs: jobs ?? this.jobs,
+      history: history ?? this.history,
       isPickingFile: isPickingFile ?? this.isPickingFile,
       error: clearError ? null : (error ?? this.error),
     );
   }
 
-  /// Returns [jobs] with [updated] merged in by job ID.
   TransferState withUpdatedJob(TransferJob updated) {
     final idx = jobs.indexWhere((j) => j.id == updated.id);
     final next = List<TransferJob>.of(jobs);
@@ -75,9 +74,10 @@ final class TransferState {
       identical(this, other) ||
       other is TransferState &&
           listEquals(other.jobs, jobs) &&
+          listEquals(other.history, history) &&
           other.isPickingFile == isPickingFile &&
           other.error == error;
 
   @override
-  int get hashCode => Object.hash(jobs, isPickingFile, error);
+  int get hashCode => Object.hash(jobs, history, isPickingFile, error);
 }

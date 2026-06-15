@@ -55,12 +55,12 @@ class TransportService {
         hostDevice: host,
         joinerDevice: joiner,
         reason: 'WiFi Direct (P2P) will be used. '
-            '${host.displayName} will act as group owner '
+            '${host.deviceName} will act as group owner '
             '(${host.wifiStandardLabel}).',
         requiresUserAction: false,
       );
       debugPrint('[EtherSynapse] Transport selected: ${plan.type.label} '
-          '— host: ${host.displayName}');
+          '— host: ${host.deviceName}');
       return plan;
     }
 
@@ -68,10 +68,10 @@ class TransportService {
     final (host, joiner) = _selectHost(local, remote);
     final hostStandard = host.wifiStandard;
     final reason = host.wifiScore > 0 && joiner.wifiScore > 0
-        ? '${host.displayName} supports ${host.wifiStandardLabel}, '
+        ? '${host.deviceName} supports ${host.wifiStandardLabel}, '
             'which provides better hotspot performance than '
-            '${joiner.displayName} (${joiner.wifiStandardLabel}).'
-        : '${host.displayName} will create the hotspot for this transfer.';
+            '${joiner.deviceName} (${joiner.wifiStandardLabel}).'
+        : '${host.deviceName} will create the hotspot for this transfer.';
 
     final plan = TransportPlan(
       type: TransportType.hotspot,
@@ -81,14 +81,14 @@ class TransportService {
       requiresUserAction: true,
       userActionLabel: 'Open Hotspot Settings',
       userActionDescription:
-          'Enable the mobile hotspot on ${host.displayName}, '
-          'then wait for ${joiner.displayName} to connect automatically.',
+          'Enable the mobile hotspot on ${host.deviceName}, '
+          'then wait for ${joiner.deviceName} to connect automatically.',
       settingsAction: SystemSettingsService.actionHotspot,
     );
 
     debugPrint(
       '[EtherSynapse] Transport selected: ${plan.type.label} '
-      '— host: ${host.displayName} ($hostStandard)',
+      '— host: ${host.deviceName} ($hostStandard)',
     );
     return plan;
   }

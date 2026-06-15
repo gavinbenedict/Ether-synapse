@@ -76,6 +76,6 @@ class TransportPlan {
 
   @override
   String toString() =>
-      'TransportPlan(type: ${type.label}, host: ${hostDevice.displayName}, '
-      'joiner: ${joinerDevice.displayName}, requiresAction: $requiresUserAction)';
+      'TransportPlan(type: ${type.label}, host: ${hostDevice.deviceName}, '
+      'joiner: ${joinerDevice.deviceName}, requiresAction: $requiresUserAction)';
 }

@@ -1,72 +1,123 @@
+import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
-import 'package:path_provider/path_provider.dart';
 
 import '../domain/transfer_state.dart';
 import '../data/tcp_transfer_service.dart';
+import '../../../shared/models/transfer_job.dart';
+import '../../../shared/services/transfer_history_service.dart';
 
 /// Riverpod [StateNotifier] for the transfer screen.
 ///
 /// Responsibilities:
-///   - Invoke file picker and forward selected paths to the repository.
-///   - Listen to the repository progress stream and merge job snapshots.
-///   - Expose accept/reject actions for incoming offers.
-///   - Surface aggregate progress to the UI.
+///   - Receiver: starts TCP server immediately on screen entry.
+///   - Sender: invokes file picker then streams file to the receiver.
+///   - Listens to TCP service progress stream and merges job snapshots.
+///   - Persists completed jobs to [TransferHistoryService].
+///   - Loads persisted history on construction.
 class TransferNotifier extends StateNotifier<TransferState> {
-  TransferNotifier() : super(const TransferState());
-  
+  TransferNotifier({this.peerName = 'Unknown'})
+      : super(const TransferState()) {
+    _init();
+  }
+
+  final String peerName;
   final _tcpService = TcpTransferService();
+  StreamSubscription<TransferJob>? _progressSub;
   bool _isReceiver = false;
+  bool _progressListening = false;
+
+  Future<void> _init() async {
+    // Load persisted history on startup.
+    final history = await TransferHistoryService.load();
+    if (mounted && history.isNotEmpty) {
+      state = state.copyWith(history: history);
+    }
+  }
+
+  // ── Progress listener ─────────────────────────────────────────────
 
   void _listenToProgress() {
-    _tcpService.progressStream.listen((job) {
-      if (mounted) {
-        state = state.withUpdatedJob(job);
+    if (_progressListening) return;
+    _progressListening = true;
+    _progressSub = _tcpService.progressStream.listen((job) {
+      if (!mounted) return;
+      state = state.withUpdatedJob(job);
+      // Persist terminal jobs to history.
+      if (job.isTerminal) {
+        TransferHistoryService.append(job);
       }
     });
   }
 
-  /// Start the TCP receiver server
-  Future<void> startReceiver(String host) async {
+  // ── Receiver side ─────────────────────────────────────────────────
+
+  /// Start the TCP receiver server.
+  ///
+  /// Must be called as soon as the receiver navigates to TransferScreen.
+  Future<void> startReceiver() async {
     if (_isReceiver) return;
     _isReceiver = true;
     _listenToProgress();
-    
+
+    debugPrint('[TCP SERVER] startReceiver — peerName: $peerName');
+
     try {
-      final dir = await getApplicationDocumentsDirectory();
-      final savePath = '${dir.path}/EtherSynapse';
-      final dirFile = Directory(savePath);
-      if (!await dirFile.exists()) {
-        await dirFile.create(recursive: true);
-      }
-      
-      await _tcpService.startServer('0.0.0.0', 8080, savePath);
+      await _tcpService.startServer(peerName: peerName);
     } catch (e) {
+      debugPrint('[TCP SERVER] startReceiver failed: $e');
       if (mounted) {
         state = state.copyWith(error: 'Failed to start receiver: $e');
       }
     }
   }
 
-  /// Open the platform file picker and send the selected file.
-  Future<void> pickAndSendFile(String host) async {
+  // ── Sender side ───────────────────────────────────────────────────
+
+  /// Open the platform file picker and send the selected file to [hostIp].
+  Future<void> pickAndSendFile(String hostIp) async {
+    if (state.isPickingFile) return;
+
+    // Guard: block if the TCP service is already sending.
+    if (_tcpService.isSending) {
+      if (mounted) {
+        state = state.copyWith(
+          error: 'A transfer is already in progress. Wait for it to complete.',
+        );
+      }
+      return;
+    }
+
     state = state.copyWith(isPickingFile: true);
-    
+
     try {
       final result = await FilePicker.platform.pickFiles(allowMultiple: false);
-      if (result == null || result.files.isEmpty || result.files.single.path == null) {
+      if (result == null ||
+          result.files.isEmpty ||
+          result.files.single.path == null) {
         state = state.copyWith(isPickingFile: false);
         return;
       }
-      
+
       state = state.copyWith(isPickingFile: false);
       _listenToProgress();
-      
+
       final file = File(result.files.single.path!);
-      await _tcpService.sendFile(host, 8080, file);
-      
+      debugPrint('[TCP CLIENT] File selected: ${file.path}');
+      await _tcpService.sendFile(hostIp, file, peerName: peerName);
+    } on StateError catch (e) {
+      // Concurrent send attempted — show non-fatal message.
+      debugPrint('[TCP CLIENT] Concurrent send blocked: $e');
+      if (mounted) {
+        state = state.copyWith(
+          isPickingFile: false,
+          error: 'Another transfer is already running.',
+        );
+      }
     } catch (e) {
+      debugPrint('[TCP CLIENT] pickAndSendFile error: $e');
       if (mounted) {
         state = state.copyWith(
           isPickingFile: false,
@@ -76,29 +127,20 @@ class TransferNotifier extends StateNotifier<TransferState> {
     }
   }
 
-  /// Open the platform file picker and send multiple files as a batch.
-  Future<void> pickAndSendBatch() async {
-    // Currently unsupported by TCP protocol
-    state = state.copyWith(isPickingFile: false);
-  }
+  // ── Misc ──────────────────────────────────────────────────────────
 
-  /// Cancel an in-progress transfer.
   Future<void> cancelTransfer(String jobId) async {
-    // TCP abort not implemented yet
-  }
-  
-  /// Accept an incoming file offer from the peer.
-  Future<void> acceptOffer(String jobId) async {
-    // TCP auto-accepts currently
+    // TCP abort not yet implemented — mark as error.
+    debugPrint('[TCP] cancelTransfer($jobId) — not implemented');
   }
 
-  /// Reject an incoming file offer from the peer.
-  Future<void> rejectOffer(String jobId) async {
-    // TCP auto-accepts currently
+  void dismissError() {
+    if (mounted) state = state.copyWith(clearError: true);
   }
-  
+
   @override
   void dispose() {
+    _progressSub?.cancel();
     if (_isReceiver) {
       _tcpService.stopServer();
     }
@@ -108,9 +150,9 @@ class TransferNotifier extends StateNotifier<TransferState> {
 
 /// Provider for [TransferNotifier].
 ///
-/// autoDispose: the transfer state is released when the transfer
-/// screen is no longer in the navigation stack.
+/// [peerName] is passed via family parameter so the TCP service can log
+/// and store the remote peer's display name in each [TransferJob].
 final transferProvider =
-    StateNotifierProvider.autoDispose<TransferNotifier, TransferState>((ref) {
-  return TransferNotifier();
-});
+    StateNotifierProvider.autoDispose.family<TransferNotifier, TransferState, String>(
+  (ref, peerName) => TransferNotifier(peerName: peerName),
+);

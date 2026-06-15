@@ -34,6 +34,20 @@
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"
         android:maxSdkVersion="30" />
 
+    <!-- TCP File Transfer: INTERNET is required for ServerSocket.bind and Socket.connect -->
+    <uses-permission android:name="android.permission.INTERNET" />
+
+    <!-- External Storage: write received files to public folders (≤ API 28) -->
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
+        android:maxSdkVersion="28" />
+    <!-- Read public media (API 33+) -->
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES"
+        tools:targetApi="tiramisu" />
+    <uses-permission android:name="android.permission.READ_MEDIA_VIDEO"
+        tools:targetApi="tiramisu" />
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO"
+        tools:targetApi="tiramisu" />
+
     <!-- WiFi & Network Permissions for Capability Detection -->
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />

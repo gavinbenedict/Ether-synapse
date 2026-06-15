@@ -214,15 +214,32 @@ class _CompleteView extends StatelessWidget {
           if (!plan.requiresUserAction)
             FilledButton.icon(
               onPressed: () {
-                final isHost = plan.hostDevice.displayName == state.localCapabilities?.displayName;
-                final hostIp = plan.hostDevice.localIpAddress ?? '127.0.0.1';
-                
-                context.goNamed(
+                // The receiver is always the TCP server host.
+                // plan.hostDevice is remote (receiver); its localIpAddress
+                // is the LAN IP the sender must connect to.
+                final hostIp = plan.hostDevice.localIpAddress ?? '';
+
+                debugPrint('[TCP CLIENT] Sender proceeding to transfer');
+                debugPrint('[TCP CLIENT] peerId: $peerId');
+                debugPrint('[TCP CLIENT] hostIp: $hostIp');
+                debugPrint('[TCP CLIENT] isHost: false');
+
+                if (hostIp.isEmpty) {
+                  debugPrint(
+                    '[TCP CLIENT] ERROR: hostIp is empty — '
+                    'receiver IP was not exchanged in capabilities',
+                  );
+                  return;
+                }
+
+                // pushNamed keeps the route stack intact so Back returns
+                // to NegotiationScreen → SendScreen → Home.
+                context.pushNamed(
                   AppRouteNames.transfer,
                   pathParameters: {'peerId': peerId},
                   queryParameters: {
                     'hostIp': hostIp,
-                    'isHost': isHost.toString(),
+                    'isHost': 'false',
                   },
                 );
               },

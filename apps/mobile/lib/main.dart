@@ -6,9 +6,14 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'app.dart';
 import 'providers/app_providers.dart';
+import 'services/gatt_service.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Register the GATT MethodChannel handler as early as possible so that
+  // onSenderCapabilitiesReceived events are never missed.
+  GattService.init();
 
   // Lock orientation to portrait on mobile platforms.
   // Desktop platforms ignore this setting.
