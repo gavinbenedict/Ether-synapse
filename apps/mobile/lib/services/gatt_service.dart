@@ -13,10 +13,12 @@ class GattService {
   /// The payload is a [DeviceCapabilities] object.
   static Stream<DeviceCapabilities> get onSenderCapabilitiesReceived {
     _channel.setMethodCallHandler((call) async {
+      debugPrint('[EtherSynapse] GATT Service: MethodChannel call: ${call.method}');
       if (call.method == 'onSenderCapabilitiesReceived') {
         try {
           final args = call.arguments as Map;
           final jsonStr = args['capabilities'] as String;
+          debugPrint('[EtherSynapse] GATT Service: Received capabilities from native: $jsonStr');
           final map = jsonDecode(jsonStr) as Map<String, dynamic>;
           final caps = DeviceCapabilities.fromJson(map);
           _controller.add(caps);
@@ -35,9 +37,11 @@ class GattService {
   Future<bool> startServer(DeviceCapabilities localCapabilities) async {
     try {
       final jsonStr = jsonEncode(localCapabilities.toJson());
+      debugPrint('[EtherSynapse] GATT Service: Starting server with capabilities: $jsonStr');
       final result = await _channel.invokeMethod<bool>('startGattServer', {
         'capabilitiesJson': jsonStr,
       });
+      debugPrint('[EtherSynapse] GATT Service: startServer result: $result');
       return result ?? false;
     } on PlatformException catch (e) {
       debugPrint('[EtherSynapse] Failed to start GATT server: $e');

@@ -71,6 +71,7 @@ class ReceiveNotifier extends StateNotifier<ReceiveState> {
   /// Always stops any existing session first so that a device-name change
   /// (Bug 1) is picked up on the next call.
   Future<void> startReceiving() async {
+    debugPrint('[EtherSynapse] ReceiveNotifier.startReceiving() - state: ${state.isAdvertising}');
     // Guard: already advertising or start in progress.
     if (state.isAdvertising || _isStarting) {
       debugPrint(
@@ -113,6 +114,7 @@ class ReceiveNotifier extends StateNotifier<ReceiveState> {
 
   /// Stop BLE advertising.
   Future<void> stopReceiving() async {
+    debugPrint('[EtherSynapse] ReceiveNotifier.stopReceiving()');
     _isStarting = false;
     await _stopSession();
     if (mounted) {
@@ -121,6 +123,7 @@ class ReceiveNotifier extends StateNotifier<ReceiveState> {
   }
 
   Future<void> _stopSession() async {
+    debugPrint('[EtherSynapse] ReceiveNotifier._stopSession() - repo active: ${_repo != null}');
     await _statusSub?.cancel();
     _statusSub = null;
     await _repo?.stopDiscovery();
@@ -129,7 +132,10 @@ class ReceiveNotifier extends StateNotifier<ReceiveState> {
   }
 
   void _onStatus(DiscoveryStatus status) {
-    if (!mounted) return;
+    if (!mounted) {
+      debugPrint('[EtherSynapse] ReceiveNotifier._onStatus() ignored - notifier unmounted');
+      return;
+    }
     state = state.copyWith(
       isAdvertising: status.isAdvertising,
       bluetoothEnabled: status.bluetoothEnabled,
@@ -138,6 +144,7 @@ class ReceiveNotifier extends StateNotifier<ReceiveState> {
 
   @override
   void dispose() {
+    debugPrint('[EtherSynapse] ReceiveNotifier.dispose()');
     _statusSub?.cancel();
     _repo?.dispose();
     super.dispose();

@@ -140,6 +140,7 @@ class BleSynapseDiscoveryService implements DiscoveryService {
   @override
   Future<void> stopDiscovery() async {
     if (!_active) return;
+    debugPrint('[EtherSynapse] BleSynapseDiscoveryService.stopDiscovery() start');
     _active = false;
 
     _expiryTimer?.cancel();
@@ -239,7 +240,7 @@ class BleSynapseDiscoveryService implements DiscoveryService {
       final advertiseSettings = AdvertiseSettings(
         advertiseMode: AdvertiseMode.advertiseModeBalanced,
         txPowerLevel: AdvertiseTxPower.advertiseTxPowerMedium,
-        connectable: false,
+        connectable: true,
         timeout: 0,
       );
 
@@ -273,7 +274,10 @@ class BleSynapseDiscoveryService implements DiscoveryService {
   }
 
   Future<void> _stopAdvertising() async {
-    if (!_isAdvertising) return;
+    if (!_isAdvertising) {
+      debugPrint('[EtherSynapse] BleSynapseDiscoveryService._stopAdvertising() - not advertising, skipping');
+      return;
+    }
     
     while (_isGlobalBleOperationPending) {
       await Future.delayed(const Duration(milliseconds: 50));
@@ -281,6 +285,7 @@ class BleSynapseDiscoveryService implements DiscoveryService {
     _isGlobalBleOperationPending = true;
 
     try {
+      debugPrint('[EtherSynapse] BleSynapseDiscoveryService._stopAdvertising() calling peripheral.stop()');
       await _peripheral.stop();
       _isAdvertising = false;
       _emitStatus();
@@ -431,6 +436,7 @@ class BleSynapseDiscoveryService implements DiscoveryService {
   }
 
   void dispose() {
+    debugPrint('[EtherSynapse] BleSynapseDiscoveryService.dispose()');
     stopDiscovery();
     _peersController.close();
     _statusController.close();

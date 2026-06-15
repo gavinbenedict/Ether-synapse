@@ -28,14 +28,20 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen>
   @override
   void initState() {
     super.initState();
+    debugPrint('[EtherSynapse] ReceiveScreen.initState()');
     WidgetsBinding.instance.addObserver(this);
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      ref.read(receiveProvider.notifier).startReceiving();
+      if (mounted) {
+        ref.read(receiveProvider.notifier).startReceiving();
+      }
     });
   }
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
+    debugPrint('[EtherSynapse] ReceiveScreen.didChangeAppLifecycleState($state), mounted: $mounted');
+    if (!mounted) return;
+
     if (state == AppLifecycleState.resumed) {
       ref.read(receiveProvider.notifier).startReceiving();
     } else if (state == AppLifecycleState.paused ||
@@ -46,9 +52,20 @@ class _ReceiveScreenState extends ConsumerState<ReceiveScreen>
 
   @override
   void dispose() {
+    debugPrint('[EtherSynapse] ReceiveScreen.dispose() start');
     WidgetsBinding.instance.removeObserver(this);
-    ref.read(receiveProvider.notifier).stopReceiving();
+    
+    // Use ref.read safely before super.dispose().
+    // Note: for autoDispose providers, the notifier will also be disposed
+    // shortly after this widget is unmounted.
+    try {
+      ref.read(receiveProvider.notifier).stopReceiving();
+    } catch (e) {
+      debugPrint('[EtherSynapse] ReceiveScreen.dispose() error calling stopReceiving: $e');
+    }
+
     super.dispose();
+    debugPrint('[EtherSynapse] ReceiveScreen.dispose() complete');
   }
 
   @override

@@ -30,12 +30,15 @@ class GattClientService {
     required String deviceId,
     required DeviceCapabilities localCapabilities,
   }) async {
-    debugPrint('[EtherSynapse] GATT connect start — deviceId: $deviceId');
+    debugPrint('[EtherSynapse] GATT exchange — START');
+    debugPrint('[EtherSynapse]   - Target deviceId (MAC): $deviceId');
+    debugPrint('[EtherSynapse]   - Local capabilities size: ${jsonEncode(localCapabilities.toJson()).length} bytes');
 
     final completer = Completer<DeviceCapabilities>();
     StreamSubscription<ConnectionStateUpdate>? sub;
 
     // Connect to the peripheral by MAC address.
+    debugPrint('[EtherSynapse] Initiating ble.connectToDevice(id: $deviceId)');
     final connectionStream = ble.connectToDevice(
       id: deviceId,
       connectionTimeout: const Duration(seconds: 15),
@@ -43,18 +46,26 @@ class GattClientService {
 
     sub = connectionStream.listen((update) async {
       debugPrint(
-        '[EtherSynapse] GATT connection state: ${update.connectionState} '
-        '(device: $deviceId)',
+        '[EtherSynapse] GATT connection state update: ${update.connectionState} '
+        '(device: $update.deviceId, status: ${update.connectionState})',
       );
 
       switch (update.connectionState) {
+        case DeviceConnectionState.connecting:
+          debugPrint('[EtherSynapse] GATT status: CONNECTING to $deviceId...');
+          break;
         case DeviceConnectionState.connected:
-          debugPrint('[EtherSynapse] GATT connected — $deviceId');
+          debugPrint('[EtherSynapse] GATT status: CONNECTED to $deviceId');
           try {
+            // Request MTU increase for large capability JSONs.
+            debugPrint('[EtherSynapse] Requesting MTU 512 for $deviceId...');
+            final mtu = await ble.requestMtu(deviceId: deviceId, mtu: 512);
+            debugPrint('[EtherSynapse] MTU negotiation result: $mtu');
+
             // Some Android devices require explicit service discovery.
-            debugPrint('[EtherSynapse] Services discovered — starting...');
+            debugPrint('[EtherSynapse] Starting service discovery for $deviceId...');
             await ble.discoverAllServices(deviceId);
-            debugPrint('[EtherSynapse] Services discovered — done');
+            debugPrint('[EtherSynapse] Service discovery completed.');
 
             final characteristic = QualifiedCharacteristic(
               characteristicId: _charUuid,
@@ -63,16 +74,18 @@ class GattClientService {
             );
 
             // 1. Read receiver capabilities.
-            debugPrint('[EtherSynapse] Capability request — reading characteristic');
+            debugPrint('[EtherSynapse] Reading receiver capabilities from $_charUuid...');
             final responseBytes = await ble.readCharacteristic(characteristic);
+            debugPrint('[EtherSynapse] Read successful. Bytes: ${responseBytes.length}');
+            
             final responseJson = utf8.decode(responseBytes);
-            debugPrint('[EtherSynapse] Capability response: $responseJson');
+            debugPrint('[EtherSynapse] Decoded response: $responseJson');
 
             final map = jsonDecode(responseJson) as Map<String, dynamic>;
             final remoteCaps = DeviceCapabilities.fromJson(map);
 
             // 2. Write sender capabilities back to receiver.
-            debugPrint('[EtherSynapse] Writing sender capabilities to characteristic');
+            debugPrint('[EtherSynapse] Writing local capabilities to $_charUuid...');
             final sendJson = jsonEncode(localCapabilities.toJson());
             final sendBytes = utf8.encode(sendJson);
 
@@ -80,39 +93,45 @@ class GattClientService {
               characteristic,
               value: sendBytes,
             );
-            debugPrint('[EtherSynapse] Sender capabilities written successfully');
+            debugPrint('[EtherSynapse] Write successful. Exchange complete.');
 
             if (!completer.isCompleted) {
               completer.complete(remoteCaps);
             }
           } catch (e, st) {
-            debugPrint('[EtherSynapse] GATT exchange error: $e\n$st');
+            debugPrint('[EtherSynapse] GATT exchange FAILURE: $e\n$st');
             if (!completer.isCompleted) {
               completer.completeError(e, st);
             }
           } finally {
-            debugPrint('[EtherSynapse] GATT cleanup — canceling subscription');
+            debugPrint('[EtherSynapse] GATT exchange finally block - cleaning up');
+            // We don't cancel sub here because we might want to wait for disconnect 
+            // OR if we are done we cancel it.
+            // Actually the original code canceled it here.
             await sub?.cancel();
-            debugPrint('[EtherSynapse] GATT disconnected — $deviceId');
+            debugPrint('[EtherSynapse] GATT subscription canceled');
           }
+          break;
+
+        case DeviceConnectionState.disconnecting:
+          debugPrint('[EtherSynapse] GATT disconnecting from $deviceId...');
+          break;
 
         case DeviceConnectionState.disconnected:
-          debugPrint('[EtherSynapse] GATT state: disconnected (device: $deviceId)');
+          debugPrint('[EtherSynapse] GATT DISCONNECTED from $deviceId');
           if (!completer.isCompleted) {
             final failure = update.failure;
             final msg = failure != null
                 ? 'GATT disconnected: ${failure.message} (code ${failure.code})'
                 : 'GATT disconnected before exchange completed';
-            debugPrint('[EtherSynapse] GATT error — $msg');
+            debugPrint('[EtherSynapse] GATT error: $msg');
             completer.completeError(Exception(msg));
           }
-
-        default:
-          // connecting / disconnecting — wait
+          await sub?.cancel();
           break;
       }
     }, onError: (Object e, StackTrace st) {
-      debugPrint('[EtherSynapse] GATT stream error: $e');
+      debugPrint('[EtherSynapse] GATT connection stream error: $e\n$st');
       if (!completer.isCompleted) {
         completer.completeError(e, st);
       }
