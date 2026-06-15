@@ -76,6 +76,9 @@ class NegotiationNotifier extends StateNotifier<NegotiationState> {
       debugPrint('[EtherSynapse] GATT connect start — peerId (session): $_peerId, '
           'bleAddress (MAC): $bleAddress, peerName: "${peer.name}"');
 
+      // Step 2.5 — Pause BLE scanning to improve connection stability on Android.
+      await _ref.read(sendProvider.notifier).pauseScanning();
+
       // Step 3 — GATT exchange with 15-second timeout.
       final remote = await _gattClient
           .exchangeCapabilities(

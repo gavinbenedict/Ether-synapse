@@ -109,6 +109,16 @@ class MainActivity : FlutterActivity() {
                     gattServerManager?.stopServer()
                     result.success(null)
                 }
+                "startAdvertising" -> {
+                    val mfgId = call.argument<Int>("manufacturerId") ?: 0xFFFF
+                    val mfgData = call.argument<ByteArray>("manufacturerData") ?: ByteArray(0)
+                    val success = gattServerManager?.startAdvertising(mfgId, mfgData) == true
+                    result.success(success)
+                }
+                "stopAdvertising" -> {
+                    gattServerManager?.stopAdvertising()
+                    result.success(null)
+                }
                 else -> result.notImplemented()
             }
         }

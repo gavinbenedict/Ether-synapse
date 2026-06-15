@@ -32,6 +32,8 @@ class DiscoveryRepositoryImpl {
 
   Future<void> stopDiscovery() => _service.stopDiscovery();
 
+  Future<void> stopScanning() => _service.stopScanning();
+
   Stream<List<PeerDevice>> get peersStream => _service.peersStream;
 
   /// Exposes the underlying service for status stream subscription.

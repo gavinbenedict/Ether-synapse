@@ -2,8 +2,10 @@ package dev.ethersynapse.ether_synapse
 
 import android.annotation.SuppressLint
 import android.bluetooth.*
+import android.bluetooth.le.*
 import android.content.Context
 import android.os.Build
+import android.os.ParcelUuid
 import android.util.Log
 import io.flutter.plugin.common.MethodChannel
 import java.nio.charset.StandardCharsets
@@ -13,13 +15,35 @@ import java.util.UUID
 class GattServerManager(private val context: Context, private val channel: MethodChannel) {
     private val TAG = "GattServerManager"
     private val bluetoothManager = context.getSystemService(Context.BLUETOOTH_SERVICE) as BluetoothManager
+    private val bluetoothAdapter = bluetoothManager.adapter
     private var gattServer: BluetoothGattServer? = null
+    private var advertiser: BluetoothLeAdvertiser? = null
     
     // Fixed UUIDs for Ether Synapse capability exchange
     private val SERVICE_UUID = UUID.fromString("0000B81D-0000-1000-8000-00805F9B34FB")
     private val CHAR_UUID = UUID.fromString("0000C81D-0000-1000-8000-00805F9B34FB")
     
     private var capabilitiesJson: String = "{}"
+
+    private val advertiseCallback = object : AdvertiseCallback() {
+        override fun onStartSuccess(settingsInEffect: AdvertiseSettings) {
+            super.onStartSuccess(settingsInEffect)
+            Log.i(TAG, "[Advertiser] onStartSuccess: Connectable=${settingsInEffect.isConnectable}, Mode=${settingsInEffect.mode}")
+        }
+
+        override fun onStartFailure(errorCode: Int) {
+            super.onStartFailure(errorCode)
+            val errorMsg = when (errorCode) {
+                ADVERTISE_FAILED_ALREADY_STARTED -> "ALREADY_STARTED"
+                ADVERTISE_FAILED_DATA_TOO_LARGE -> "DATA_TOO_LARGE"
+                ADVERTISE_FAILED_FEATURE_UNSUPPORTED -> "FEATURE_UNSUPPORTED"
+                ADVERTISE_FAILED_INTERNAL_ERROR -> "INTERNAL_ERROR"
+                ADVERTISE_FAILED_TOO_MANY_ADVERTISERS -> "TOO_MANY_ADVERTISERS"
+                else -> "UNKNOWN ($errorCode)"
+            }
+            Log.e(TAG, "[Advertiser] onStartFailure: $errorMsg")
+        }
+    }
     
     private val gattServerCallback = object : BluetoothGattServerCallback() {
         override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
@@ -32,6 +56,12 @@ class GattServerManager(private val context: Context, private val channel: Metho
                 else -> "UNKNOWN ($newState)"
             }
             Log.d(TAG, "[GATT Server] onConnectionStateChange: device=${device.address}, status=$status, newState=$stateStr")
+            
+            if (newState == BluetoothProfile.STATE_CONNECTED) {
+                Log.i(TAG, "[GATT Server] DEVICE CONNECTED: ${device.address}")
+            } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
+                Log.i(TAG, "[GATT Server] DEVICE DISCONNECTED: ${device.address}")
+            }
         }
 
         override fun onServiceAdded(status: Int, service: BluetoothGattService) {
@@ -155,11 +185,20 @@ class GattServerManager(private val context: Context, private val channel: Metho
         
         Log.d(TAG, "[GATT Server] GATT server opened, adding service: $SERVICE_UUID")
         val service = BluetoothGattService(SERVICE_UUID, BluetoothGattService.SERVICE_TYPE_PRIMARY)
+        
         val characteristic = BluetoothGattCharacteristic(
             CHAR_UUID,
-            BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE,
+            BluetoothGattCharacteristic.PROPERTY_READ or BluetoothGattCharacteristic.PROPERTY_WRITE or BluetoothGattCharacteristic.PROPERTY_NOTIFY,
             BluetoothGattCharacteristic.PERMISSION_READ or BluetoothGattCharacteristic.PERMISSION_WRITE
         )
+        
+        // Add Client Characteristic Configuration Descriptor (CCCD)
+        val cccdUuid = UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+        val descriptor = BluetoothGattDescriptor(
+            cccdUuid,
+            BluetoothGattDescriptor.PERMISSION_READ or BluetoothGattDescriptor.PERMISSION_WRITE
+        )
+        characteristic.addDescriptor(descriptor)
         
         service.addCharacteristic(characteristic)
         val success = gattServer?.addService(service) == true
@@ -167,7 +206,44 @@ class GattServerManager(private val context: Context, private val channel: Metho
         return success
     }
     
+    fun startAdvertising(manufacturerId: Int, manufacturerData: ByteArray): Boolean {
+        Log.d(TAG, "[Advertiser] startAdvertising called: mfgId=$manufacturerId, dataSize=${manufacturerData.size}")
+        
+        if (advertiser == null) {
+            advertiser = bluetoothAdapter.bluetoothLeAdvertiser
+        }
+        
+        if (advertiser == null) {
+            Log.e(TAG, "[Advertiser] Unable to get BluetoothLeAdvertiser")
+            return false
+        }
+
+        val settings = AdvertiseSettings.Builder()
+            .setAdvertiseMode(AdvertiseSettings.ADVERTISE_MODE_BALANCED)
+            .setConnectable(true) // CRITICAL: must be true for GATT connection
+            .setTimeout(0)
+            .setTxPowerLevel(AdvertiseSettings.ADVERTISE_TX_POWER_MEDIUM)
+            .build()
+
+        val data = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .setIncludeTxPowerLevel(false)
+            .addManufacturerData(manufacturerId, manufacturerData)
+            .build()
+
+        Log.d(TAG, "[Advertiser] Starting advertisement (manufacturerData size: ${manufacturerData.size})")
+        advertiser?.startAdvertising(settings, data, advertiseCallback)
+        return true
+    }
+    
+    fun stopAdvertising() {
+        Log.d(TAG, "[Advertiser] stopAdvertising")
+        advertiser?.stopAdvertising(advertiseCallback)
+    }
+    
     fun stopServer() {
+        Log.d(TAG, "[GATT Server] stopServer")
+        stopAdvertising()
         gattServer?.close()
         gattServer = null
     }

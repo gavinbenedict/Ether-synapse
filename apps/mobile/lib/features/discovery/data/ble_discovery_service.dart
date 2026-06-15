@@ -3,7 +3,6 @@ import 'dart:io';
 
 import 'package:flutter/foundation.dart';
 import 'package:flutter_reactive_ble/flutter_reactive_ble.dart';
-import 'package:flutter_ble_peripheral/flutter_ble_peripheral.dart';
 import 'package:permission_handler/permission_handler.dart';
 
 import '../../../core/constants/app_constants.dart';
@@ -17,20 +16,8 @@ import 'ble_advertisement_codec.dart';
 
 /// Concrete implementation of [DiscoveryService] for the Android BLE stack.
 ///
-/// Responsibilities:
-///   - Requests all necessary BLE permissions before starting.
-///   - For [DeviceRole.receiver]: detects local capabilities via
-///     [CapabilityService] and encodes them into the advertisement payload
-///     (protocol v2) so senders receive real capability data without GATT.
-///   - Starts BLE advertising via [FlutterBlePeripheral].
-///   - Scans for peers via [FlutterReactiveBle].
-///   - Decodes manufacturer-specific data using [BleAdvertisementCodec].
-///   - Merges, deduplicates, and expires stale peers.
-///   - Emits a [List<PeerDevice>] snapshot every time the peer set changes.
-///   - Emits advertising and scanning state changes for the UI.
-///
-/// Thread safety: all mutable state is accessed only from async callbacks
-/// on the same event loop; no explicit locking is required.
+/// Phase 3 (Native Fix): Now uses native Android advertising integrated
+/// with the GATT server to resolve connection issues.
 class BleSynapseDiscoveryService implements DiscoveryService {
   BleSynapseDiscoveryService({
     required String deviceName,
@@ -47,7 +34,6 @@ class BleSynapseDiscoveryService implements DiscoveryService {
   final int _sessionId;
 
   static bool _isGlobalBleOperationPending = false;
-  static final _peripheral = FlutterBlePeripheral();
   static final _ble = FlutterReactiveBle();
   final CapabilityService _capabilityService = CapabilityService();
   final GattService _gattService = GattService();
@@ -128,7 +114,9 @@ class BleSynapseDiscoveryService implements DiscoveryService {
       // Start GATT Server with full local capabilities JSON payload
       if (_localCapabilities != null) {
         final success = await _gattService.startServer(_localCapabilities!);
-        debugPrint('[EtherSynapse] GATT Server started: $success');
+        debugPrint('[EtherSynapse] GATT Server start initiated: $success');
+        // Give the Android BLE stack a moment to register the service before advertising.
+        await Future.delayed(const Duration(milliseconds: 500));
       }
     } catch (e) {
       debugPrint('[EtherSynapse] Capability detection error (non-fatal): $e');
@@ -213,15 +201,6 @@ class BleSynapseDiscoveryService implements DiscoveryService {
 
   Future<void> _startAdvertising() async {
     try {
-      final isSupported = await _peripheral.isSupported;
-      if (!isSupported) {
-        debugPrint(
-          '[EtherSynapse] BLE peripheral mode not supported on this device '
-          '— skipping advertising',
-        );
-        return;
-      }
-
       // v2 payload: real capabilities encoded if available.
       final payload = BleAdvertisementCodec.encode(
         displayName: _deviceName,
@@ -230,43 +209,33 @@ class BleSynapseDiscoveryService implements DiscoveryService {
         capabilities: _localCapabilities,
       );
 
-      final advertiseData = AdvertiseData(
-        serviceUuid: null, // null = omit; '' = crash (IllegalArgumentException)
-        manufacturerId: AppConstants.bleCompanyId,
-        manufacturerData: payload,
-        includeDeviceName: false,
-      );
-
-      final advertiseSettings = AdvertiseSettings(
-        advertiseMode: AdvertiseMode.advertiseModeBalanced,
-        txPowerLevel: AdvertiseTxPower.advertiseTxPowerMedium,
-        connectable: true,
-        timeout: 0,
-      );
-
       while (_isGlobalBleOperationPending) {
         await Future.delayed(const Duration(milliseconds: 50));
       }
       _isGlobalBleOperationPending = true;
 
       debugPrint(
-        '[EtherSynapse] Starting BLE advertising '
+        '[EtherSynapse] Starting NATIVE BLE advertising '
         '(sessionId: ${_sessionId.toRadixString(16).padLeft(8, '0')}, '
         'device: "$_deviceName", '
         'caps: $_localCapabilities, '
         'payloadBytes: ${payload.length})',
       );
 
-      await _peripheral.start(
-        advertiseData: advertiseData,
-        advertiseSettings: advertiseSettings,
+      final success = await _gattService.startAdvertising(
+        manufacturerId: AppConstants.bleCompanyId,
+        manufacturerData: payload,
       );
 
-      _isAdvertising = true;
+      _isAdvertising = success;
       _emitStatus();
-      debugPrint('[EtherSynapse] BLE advertising STARTED successfully');
+      if (success) {
+        debugPrint('[EtherSynapse] NATIVE BLE advertising STARTED successfully');
+      } else {
+        debugPrint('[EtherSynapse] FAILED to start native BLE advertising');
+      }
     } catch (e) {
-      debugPrint('[EtherSynapse] Failed to start BLE advertising: $e');
+      debugPrint('[EtherSynapse] Failed to start native BLE advertising: $e');
       rethrow;
     } finally {
       _isGlobalBleOperationPending = false;
@@ -285,13 +254,13 @@ class BleSynapseDiscoveryService implements DiscoveryService {
     _isGlobalBleOperationPending = true;
 
     try {
-      debugPrint('[EtherSynapse] BleSynapseDiscoveryService._stopAdvertising() calling peripheral.stop()');
-      await _peripheral.stop();
+      debugPrint('[EtherSynapse] BleSynapseDiscoveryService._stopAdvertising() calling gattService.stopAdvertising()');
+      await _gattService.stopAdvertising();
       _isAdvertising = false;
       _emitStatus();
-      debugPrint('[EtherSynapse] BLE advertising STOPPED');
+      debugPrint('[EtherSynapse] NATIVE BLE advertising STOPPED');
     } catch (e) {
-      debugPrint('[EtherSynapse] Failed to stop BLE advertising: $e');
+      debugPrint('[EtherSynapse] Failed to stop native BLE advertising: $e');
     } finally {
       _isGlobalBleOperationPending = false;
     }
@@ -300,6 +269,7 @@ class BleSynapseDiscoveryService implements DiscoveryService {
   // ── Scanning ──────────────────────────────────────────────────────
 
   void _startScanning() {
+    if (_isScanning) return;
     _scanSubscription = _ble
         .scanForDevices(
           withServices: const [],
@@ -315,12 +285,18 @@ class BleSynapseDiscoveryService implements DiscoveryService {
     debugPrint('[EtherSynapse] BLE scanning STARTED');
   }
 
-  Future<void> _stopScanning() async {
+  /// Stops scanning. Does NOT clear the discovered peer list.
+  Future<void> stopScanning() async {
+    if (!_isScanning) return;
     await _scanSubscription?.cancel();
     _scanSubscription = null;
     _isScanning = false;
     _emitStatus();
-    debugPrint('[EtherSynapse] BLE scanning STOPPED');
+    debugPrint('[EtherSynapse] BLE scanning STOPPED (peers preserved)');
+  }
+
+  Future<void> _stopScanning() async {
+    await stopScanning();
   }
 
   void _onDeviceDiscovered(DiscoveredDevice device) {

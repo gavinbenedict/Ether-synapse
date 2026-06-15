@@ -57,4 +57,33 @@ class GattService {
       debugPrint('[EtherSynapse] Failed to stop GATT server: $e');
     }
   }
+
+  /// Starts native BLE advertising with manufacturer data.
+  Future<bool> startAdvertising({
+    required int manufacturerId,
+    required Uint8List manufacturerData,
+  }) async {
+    try {
+      debugPrint('[EtherSynapse] GATT Service: Starting native advertising...');
+      final result = await _channel.invokeMethod<bool>('startAdvertising', {
+        'manufacturerId': manufacturerId,
+        'manufacturerData': manufacturerData,
+      });
+      debugPrint('[EtherSynapse] GATT Service: startAdvertising result: $result');
+      return result ?? false;
+    } on PlatformException catch (e) {
+      debugPrint('[EtherSynapse] Failed to start native advertising: $e');
+      return false;
+    }
+  }
+
+  /// Stops native BLE advertising.
+  Future<void> stopAdvertising() async {
+    try {
+      await _channel.invokeMethod('stopAdvertising');
+      debugPrint('[EtherSynapse] GATT Service: Native advertising stopped');
+    } on PlatformException catch (e) {
+      debugPrint('[EtherSynapse] Failed to stop native advertising: $e');
+    }
+  }
 }

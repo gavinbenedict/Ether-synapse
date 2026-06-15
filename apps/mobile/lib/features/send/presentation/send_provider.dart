@@ -97,6 +97,13 @@ class SendNotifier extends StateNotifier<SendState> {
     }
   }
 
+  /// Pauses the background BLE scan without clearing discovered receivers.
+  /// Used before initiating a GATT connection to avoid stack conflicts.
+  Future<void> pauseScanning() async {
+    debugPrint('[EtherSynapse] SendNotifier.pauseScanning()');
+    await _repo?.stopScanning();
+  }
+
   Future<void> stopScanning() async {
     await _peersSub?.cancel();
     _peersSub = null;
