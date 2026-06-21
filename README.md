@@ -17,7 +17,7 @@
 
 ---
 
-## What Is Ether Synapse?
+## What Is Ether ynapse?
 
 Ether Synapse is a free, open-source, privacy-first file transfer application. It transfers files directly between devices over a local Wi-Fi network at maximum speed, using Bluetooth Low Energy only to discover, pair, and verify nearby peers. Nothing ever leaves your local network. There are no servers, no accounts, no telemetry, and no subscriptions — ever.
 
